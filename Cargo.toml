@@ -1,0 +1,28 @@
+[package]
+name = "deepagents"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "Apache-2.0"
+description = "Rust port of the LangChain Deep Agents SDK harness, built on juncture (LangGraph runtime)"
+
+[dependencies]
+# juncture 提供 LangGraph runtime（StateGraph/Pregel/Command/interrupt/Store/Checkpointer/ChatModel/Tool）。
+# B 路径：deepagents-rust 自建中间件拦截层，不依赖 juncture 的 create_agent_with_middleware。
+juncture = { path = "../juncture/crates/juncture", features = ["openai", "anthropic"] }
+juncture-core = { path = "../juncture/crates/juncture-core" }
+juncture-checkpoint = { path = "../juncture/crates/juncture-checkpoint" }
+juncture-derive = { path = "../juncture/crates/juncture-derive" }
+
+async-trait = "0.1"
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt", "macros"] }
+tracing = "0.1"
+
+[dev-dependencies]
+# test-util feature 提供 MockChatModel（MVP 端到端驱动的确定性测试模型）。
+juncture = { path = "../juncture/crates/juncture", features = ["test-util", "openai", "anthropic"] }
+tokio = { version = "1", features = ["rt", "macros", "rt-multi-thread"] }
