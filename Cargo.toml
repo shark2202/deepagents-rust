@@ -16,13 +16,16 @@ juncture-derive = { path = "../juncture/crates/juncture-derive" }
 
 async-trait = "0.1"
 futures = "0.3"
+globset = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["rt", "macros"] }
+tokio = { version = "1", features = ["rt", "macros", "process", "fs"] }
 tracing = "0.1"
+walkdir = "2"
 
 [dev-dependencies]
 # test-util feature 提供 MockChatModel（MVP 端到端驱动的确定性测试模型）。
 juncture = { path = "../juncture/crates/juncture", features = ["test-util", "openai", "anthropic"] }
+tempfile = "3"
 tokio = { version = "1", features = ["rt", "macros", "rt-multi-thread"] }

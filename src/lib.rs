@@ -20,7 +20,7 @@ pub mod middleware;
 pub mod backend;
 pub mod graph;
 
-pub use backend::{Backend, ReadonlyBackend};
+pub use backend::{Backend, FilesystemBackend, LocalShellBackend, ReadonlyBackend, SandboxBackend};
 pub use graph::{create_deep_agent, DeepAgentBuilder, DeepAgentConfig};
 pub use middleware::filesystem::FilesystemMiddleware;
 pub use middleware::{Middleware, MiddlewareChain, MiddlewareError, ModelRequest};
