@@ -154,8 +154,15 @@ pub fn create_deep_agent<M: ChatModel>(
         checkpointer: _,
     } = config;
 
-    // 全量工具定义（llm 格式）。中间件 wrap_model_call 在此基础上过滤。
-    let all_tool_defs: Vec<ToolsToolDefinition> = tools.iter().map(|t| t.definition()).collect();
+    // 合并 caller tools + 各 middleware 提供的工具（如 FilesystemMiddleware 的 8 个 fs 工具）。
+    // 加性合并，对齐 deepagents：中间件提供工具 + caller 自带工具共存。
+    let all_tools: Vec<Box<dyn Tool>> = tools
+        .into_iter()
+        .chain(middleware.iter().flat_map(|m| m.tools()))
+        .collect();
+
+    // 全量工具定义（llm 格式）。中间件 wrap_model_call 在此基础上 per-call 过滤。
+    let all_tool_defs: Vec<ToolsToolDefinition> = all_tools.iter().map(|t| t.definition()).collect();
     let all_llm_tool_defs = convert_tool_defs(&all_tool_defs);
 
     let model = Arc::new(model);
@@ -218,8 +225,8 @@ pub fn create_deep_agent<M: ChatModel>(
         .boxed()
     });
 
-    // tools 节点：复用 juncture ToolNode
-    let tool_node = Arc::new(ToolNode::new(tools));
+    // tools 节点：复用 juncture ToolNode（持全量工具：caller + middleware 提供）
+    let tool_node = Arc::new(ToolNode::new(all_tools));
     let tools_node = NodeFnUpdate(move |state: &DeepAgentState| {
         let tool_node = Arc::clone(&tool_node);
         let messages = state.messages.clone();

@@ -12,12 +12,14 @@
 //! 故自建本 trait。juncture runtime（`StateGraph`/Pregel/`Command`/`Node`）仍照常使用。
 
 pub mod filesystem;
+pub mod fs_tools;
 
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use juncture::llm::{CallOptions, Message, ToolDefinition};
+use juncture::tools::Tool;
 
 use crate::state::DeepAgentState;
 
@@ -82,6 +84,13 @@ pub trait Middleware: Send + Sync + Debug {
     ) -> Result<(), MiddlewareError> {
         Ok(())
     }
+
+    /// 该中间件提供的工具（与 caller tools 加性合并进 agent 工具集）。
+    /// 默认空；如 `FilesystemMiddleware` override 返回 8 个 fs 工具。
+    /// 工具持 `Arc<dyn Backend>` 等依赖，由中间件注入。
+    fn tools(&self) -> Vec<Box<dyn Tool>> {
+        Vec::new()
+    }
 }
 
 /// 有序中间件链。
@@ -117,6 +126,11 @@ impl MiddlewareChain {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
+    }
+
+    /// 迭代中间件引用（供 `create_deep_agent` 合并各 middleware.tools()）。
+    pub fn iter(&self) -> impl Iterator<Item = &Arc<dyn Middleware>> {
+        self.inner.iter()
     }
 
     /// 正向跑 `before_agent`。
