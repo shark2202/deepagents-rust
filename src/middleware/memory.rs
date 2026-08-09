@@ -85,7 +85,10 @@ impl MemoryMiddleware {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("failed to read memory source {}; skipping: {e}", path.display());
+                    tracing::warn!(
+                        "failed to read memory source {}; skipping: {e}",
+                        path.display()
+                    );
                 }
             }
         }
@@ -165,7 +168,10 @@ mod tests {
 
     #[test]
     fn strip_removes_closed_comment() {
-        assert_eq!(strip_html_comments("before <!-- hidden --> after"), "before  after");
+        assert_eq!(
+            strip_html_comments("before <!-- hidden --> after"),
+            "before  after"
+        );
     }
 
     #[test]
@@ -202,7 +208,10 @@ mod tests {
             options: CallOptions::default(),
         };
         inject_memory(&mut req, "记忆内容");
-        assert_eq!(req.system_message, "base\n\n<agent_memory>\n记忆内容\n</agent_memory>");
+        assert_eq!(
+            req.system_message,
+            "base\n\n<agent_memory>\n记忆内容\n</agent_memory>"
+        );
     }
 
     #[test]

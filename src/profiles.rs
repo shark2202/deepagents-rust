@@ -126,10 +126,7 @@ impl HarnessProfile {
 
     /// 设置 `tool_description_overrides`（替换）。
     #[must_use]
-    pub fn tool_description_overrides(
-        mut self,
-        overrides: HashMap<String, String>,
-    ) -> Self {
+    pub fn tool_description_overrides(mut self, overrides: HashMap<String, String>) -> Self {
         self.tool_description_overrides = overrides;
         self
     }
@@ -216,27 +213,24 @@ impl ProfileRegistry {
     pub fn register_builtin(&mut self) {
         self.register(
             "anthropic-opus",
-            HarnessProfile::new("anthropic", "claude-opus-4-7")
-                .system_prompt_suffix(
-                    "Use parallel tool calls when independent. Read files before \
+            HarnessProfile::new("anthropic", "claude-opus-4-7").system_prompt_suffix(
+                "Use parallel tool calls when independent. Read files before \
                      describing them. Reflect on tool results before proceeding.",
-                ),
+            ),
         );
         self.register(
             "anthropic-sonnet",
-            HarnessProfile::new("anthropic", "claude-sonnet-4-6")
-                .system_prompt_suffix(
-                    "Prefer parallel tool calls for independent reads. Ground \
+            HarnessProfile::new("anthropic", "claude-sonnet-4-6").system_prompt_suffix(
+                "Prefer parallel tool calls for independent reads. Ground \
                      answers in observed tool output; do not speculate.",
-                ),
+            ),
         );
         self.register(
             "openai-gpt",
-            HarnessProfile::new("openai", "gpt-5.1")
-                .system_prompt_suffix(
-                    "Bias to action: implement with reasonable assumptions rather \
+            HarnessProfile::new("openai", "gpt-5.1").system_prompt_suffix(
+                "Bias to action: implement with reasonable assumptions rather \
                      than asking for clarification. Batch independent tool calls.",
-                ),
+            ),
         );
     }
 }
@@ -346,10 +340,7 @@ mod tests {
     fn registry_register_get_list() {
         let mut reg = ProfileRegistry::new();
         assert!(reg.is_empty());
-        reg.register(
-            "mine",
-            HarnessProfile::new("anthropic", "claude-opus-4-7"),
-        );
+        reg.register("mine", HarnessProfile::new("anthropic", "claude-opus-4-7"));
         assert_eq!(reg.len(), 1);
         assert!(reg.get("mine").is_some());
         assert!(reg.get("missing").is_none());
@@ -392,10 +383,7 @@ mod tests {
         let p = HarnessProfile::new("a", "m")
             .base_system_prompt("BASE")
             .system_prompt_suffix("SUFFIX");
-        assert_eq!(
-            apply_profile_prompt(&p, "USER"),
-            "USER\n\nBASE\n\nSUFFIX",
-        );
+        assert_eq!(apply_profile_prompt(&p, "USER"), "USER\n\nBASE\n\nSUFFIX",);
     }
 
     #[test]

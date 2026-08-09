@@ -211,6 +211,10 @@ mod tests {
             .before_agent(&mut state)
             .await
             .expect("before_agent ok");
-        assert_eq!(state.messages.len(), len_before, "mid-history dangling untouched");
+        assert_eq!(
+            state.messages.len(),
+            len_before,
+            "mid-history dangling untouched"
+        );
     }
 }

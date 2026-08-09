@@ -37,7 +37,10 @@ impl FilesystemMiddleware {
     /// 以给定后端构造（无权限规则）。
     #[must_use]
     pub fn new(backend: Arc<dyn Backend>) -> Self {
-        Self { backend, permissions: Arc::from([]) }
+        Self {
+            backend,
+            permissions: Arc::from([]),
+        }
     }
 
     /// 以给定后端 + 权限规则构造。
@@ -46,7 +49,10 @@ impl FilesystemMiddleware {
         backend: Arc<dyn Backend>,
         permissions: Vec<FilesystemPermission>,
     ) -> Self {
-        Self { backend, permissions: Arc::from(permissions) }
+        Self {
+            backend,
+            permissions: Arc::from(permissions),
+        }
     }
 
     /// 后端引用（供外部构造 CompositeBackend 等）。

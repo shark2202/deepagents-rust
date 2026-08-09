@@ -8,8 +8,10 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use deepagents::{DeepAgentBuilder, DeepAgentState, FilesystemMiddleware, ReadonlyBackend};
-use juncture::llm::{CallOptions, ChatModel, LlmError, Message, MessageChunk, Role, ToolDefinition};
 use juncture::RunnableConfig;
+use juncture::llm::{
+    CallOptions, ChatModel, LlmError, Message, MessageChunk, Role, ToolDefinition,
+};
 
 /// 间谍模型：记录 bind_tools 收到的 tool 名 + invoke 收到的 system message。
 #[derive(Clone)]

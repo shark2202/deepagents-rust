@@ -78,70 +78,203 @@ pub struct ReadResult {
 impl ReadResult {
     /// 成功构造（含分页元数据）。
     #[must_use]
-    pub fn ok(file_data: FileData, total_lines: usize, start_line: usize, end_line: usize, next_offset: Option<usize>) -> Self {
-        Self { error: None, file_data: Some(file_data), total_lines: Some(total_lines), start_line: Some(start_line), end_line: Some(end_line), next_offset, no_lines_requested: false }
+    pub fn ok(
+        file_data: FileData,
+        total_lines: usize,
+        start_line: usize,
+        end_line: usize,
+        next_offset: Option<usize>,
+    ) -> Self {
+        Self {
+            error: None,
+            file_data: Some(file_data),
+            total_lines: Some(total_lines),
+            start_line: Some(start_line),
+            end_line: Some(end_line),
+            next_offset,
+            no_lines_requested: false,
+        }
     }
     /// 失败构造。
     #[must_use]
     pub fn err(msg: impl Into<String>) -> Self {
-        Self { error: Some(msg.into()), ..Default::default() }
+        Self {
+            error: Some(msg.into()),
+            ..Default::default()
+        }
     }
 }
 
 /// `write` 结果。
 #[derive(Clone, Debug, Default)]
-pub struct WriteResult { pub error: Option<String>, pub path: Option<String> }
+pub struct WriteResult {
+    pub error: Option<String>,
+    pub path: Option<String>,
+}
 impl WriteResult {
-    #[must_use] pub fn ok(path: impl Into<String>) -> Self { Self { error: None, path: Some(path.into()) } }
-    #[must_use] pub fn err(msg: impl Into<String>) -> Self { Self { error: Some(msg.into()), path: None } }
+    #[must_use]
+    pub fn ok(path: impl Into<String>) -> Self {
+        Self {
+            error: None,
+            path: Some(path.into()),
+        }
+    }
+    #[must_use]
+    pub fn err(msg: impl Into<String>) -> Self {
+        Self {
+            error: Some(msg.into()),
+            path: None,
+        }
+    }
 }
 
 /// `edit` 结果。
 #[derive(Clone, Debug, Default)]
-pub struct EditResult { pub error: Option<String>, pub path: Option<String>, pub occurrences: Option<usize> }
+pub struct EditResult {
+    pub error: Option<String>,
+    pub path: Option<String>,
+    pub occurrences: Option<usize>,
+}
 impl EditResult {
-    #[must_use] pub fn ok(path: impl Into<String>, occurrences: usize) -> Self { Self { error: None, path: Some(path.into()), occurrences: Some(occurrences) } }
-    #[must_use] pub fn err(msg: impl Into<String>) -> Self { Self { error: Some(msg.into()), path: None, occurrences: None } }
+    #[must_use]
+    pub fn ok(path: impl Into<String>, occurrences: usize) -> Self {
+        Self {
+            error: None,
+            path: Some(path.into()),
+            occurrences: Some(occurrences),
+        }
+    }
+    #[must_use]
+    pub fn err(msg: impl Into<String>) -> Self {
+        Self {
+            error: Some(msg.into()),
+            path: None,
+            occurrences: None,
+        }
+    }
 }
 
 /// `delete` 结果。
 #[derive(Clone, Debug, Default)]
-pub struct DeleteResult { pub error: Option<String>, pub path: Option<String> }
+pub struct DeleteResult {
+    pub error: Option<String>,
+    pub path: Option<String>,
+}
 impl DeleteResult {
-    #[must_use] pub fn ok(path: impl Into<String>) -> Self { Self { error: None, path: Some(path.into()) } }
-    #[must_use] pub fn err(msg: impl Into<String>) -> Self { Self { error: Some(msg.into()), path: None } }
+    #[must_use]
+    pub fn ok(path: impl Into<String>) -> Self {
+        Self {
+            error: None,
+            path: Some(path.into()),
+        }
+    }
+    #[must_use]
+    pub fn err(msg: impl Into<String>) -> Self {
+        Self {
+            error: Some(msg.into()),
+            path: None,
+        }
+    }
 }
 
 /// `ls` 结果。
 #[derive(Clone, Debug, Default)]
-pub struct LsResult { pub error: Option<String>, pub entries: Option<Vec<FileInfo>> }
+pub struct LsResult {
+    pub error: Option<String>,
+    pub entries: Option<Vec<FileInfo>>,
+}
 impl LsResult {
-    #[must_use] pub fn ok(entries: Vec<FileInfo>) -> Self { Self { error: None, entries: Some(entries) } }
-    #[must_use] pub fn err(msg: impl Into<String>) -> Self { Self { error: Some(msg.into()), entries: None } }
+    #[must_use]
+    pub fn ok(entries: Vec<FileInfo>) -> Self {
+        Self {
+            error: None,
+            entries: Some(entries),
+        }
+    }
+    #[must_use]
+    pub fn err(msg: impl Into<String>) -> Self {
+        Self {
+            error: Some(msg.into()),
+            entries: None,
+        }
+    }
 }
 
 /// `grep` 结果。
 #[derive(Clone, Debug, Default)]
-pub struct GrepResult { pub error: Option<String>, pub matches: Option<Vec<GrepMatch>>, pub truncated: bool }
+pub struct GrepResult {
+    pub error: Option<String>,
+    pub matches: Option<Vec<GrepMatch>>,
+    pub truncated: bool,
+}
 impl GrepResult {
-    #[must_use] pub fn ok(matches: Vec<GrepMatch>) -> Self { Self { error: None, matches: Some(matches), truncated: false } }
-    #[must_use] pub fn err(msg: impl Into<String>) -> Self { Self { error: Some(msg.into()), matches: None, truncated: false } }
+    #[must_use]
+    pub fn ok(matches: Vec<GrepMatch>) -> Self {
+        Self {
+            error: None,
+            matches: Some(matches),
+            truncated: false,
+        }
+    }
+    #[must_use]
+    pub fn err(msg: impl Into<String>) -> Self {
+        Self {
+            error: Some(msg.into()),
+            matches: None,
+            truncated: false,
+        }
+    }
     /// 截断（达到 max_count）。
     #[must_use]
-    pub fn truncated(matches: Vec<GrepMatch>) -> Self { Self { error: None, matches: Some(matches), truncated: true } }
+    pub fn truncated(matches: Vec<GrepMatch>) -> Self {
+        Self {
+            error: None,
+            matches: Some(matches),
+            truncated: true,
+        }
+    }
 }
 
 /// `glob` 结果。
 #[derive(Clone, Debug, Default)]
-pub struct GlobResult { pub error: Option<String>, pub matches: Option<Vec<FileInfo>>, pub truncated: bool }
+pub struct GlobResult {
+    pub error: Option<String>,
+    pub matches: Option<Vec<FileInfo>>,
+    pub truncated: bool,
+}
 impl GlobResult {
-    #[must_use] pub fn ok(matches: Vec<FileInfo>) -> Self { Self { error: None, matches: Some(matches), truncated: false } }
-    #[must_use] pub fn err(msg: impl Into<String>) -> Self { Self { error: Some(msg.into()), matches: None, truncated: false } }
+    #[must_use]
+    pub fn ok(matches: Vec<FileInfo>) -> Self {
+        Self {
+            error: None,
+            matches: Some(matches),
+            truncated: false,
+        }
+    }
+    #[must_use]
+    pub fn err(msg: impl Into<String>) -> Self {
+        Self {
+            error: Some(msg.into()),
+            matches: None,
+            truncated: false,
+        }
+    }
 }
 
 /// `execute` 结果（合并 stdout+stderr）。
 #[derive(Clone, Debug, Default)]
-pub struct ExecuteResponse { pub output: String, pub exit_code: Option<i32>, pub truncated: bool }
+pub struct ExecuteResponse {
+    pub output: String,
+    pub exit_code: Option<i32>,
+    pub truncated: bool,
+}
 impl ExecuteResponse {
-    #[must_use] pub fn new(output: impl Into<String>, exit_code: Option<i32>) -> Self { Self { output: output.into(), exit_code, truncated: false } }
+    #[must_use]
+    pub fn new(output: impl Into<String>, exit_code: Option<i32>) -> Self {
+        Self {
+            output: output.into(),
+            exit_code,
+            truncated: false,
+        }
+    }
 }

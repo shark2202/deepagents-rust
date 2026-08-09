@@ -15,26 +15,63 @@ pub trait Backend: Send + Sync + Debug {
     /// 默认全 8 个恒暴露；具体 backend 可 override 裁剪（如 ReadonlyBackend 只 `read_file`）。
     /// 返回 `Vec` 而非 `&'static` 以支持 `CompositeBackend` 动态 union。
     fn supported_tools(&self) -> Vec<&'static str> {
-        vec!["ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep", "execute"]
+        vec![
+            "ls",
+            "read_file",
+            "write_file",
+            "edit_file",
+            "delete",
+            "glob",
+            "grep",
+            "execute",
+        ]
     }
 
     /// 列目录。
-    async fn ls(&self, _path: &str) -> LsResult { LsResult::err("not implemented: ls") }
+    async fn ls(&self, _path: &str) -> LsResult {
+        LsResult::err("not implemented: ls")
+    }
     /// 读文件行窗口。
-    async fn read(&self, _file_path: &str, _offset: usize, _limit: usize) -> ReadResult { ReadResult::err("not implemented: read") }
+    async fn read(&self, _file_path: &str, _offset: usize, _limit: usize) -> ReadResult {
+        ReadResult::err("not implemented: read")
+    }
     /// 字面量文本搜索（非 regex）。
-    async fn grep(&self, _pattern: &str, _path: Option<&str>, _glob: Option<&str>, _max_count: Option<usize>) -> GrepResult { GrepResult::err("not implemented: grep") }
+    async fn grep(
+        &self,
+        _pattern: &str,
+        _path: Option<&str>,
+        _glob: Option<&str>,
+        _max_count: Option<usize>,
+    ) -> GrepResult {
+        GrepResult::err("not implemented: grep")
+    }
     /// glob 匹配文件。
-    async fn glob(&self, _pattern: &str, _path: Option<&str>) -> GlobResult { GlobResult::err("not implemented: glob") }
+    async fn glob(&self, _pattern: &str, _path: Option<&str>) -> GlobResult {
+        GlobResult::err("not implemented: glob")
+    }
     /// 写文件（创建或覆盖）。
-    async fn write(&self, _file_path: &str, _content: &str) -> WriteResult { WriteResult::err("not implemented: write") }
+    async fn write(&self, _file_path: &str, _content: &str) -> WriteResult {
+        WriteResult::err("not implemented: write")
+    }
     /// 精确字符串替换。
-    async fn edit(&self, _file_path: &str, _old_string: &str, _new_string: &str, _replace_all: bool) -> EditResult { EditResult::err("not implemented: edit") }
+    async fn edit(
+        &self,
+        _file_path: &str,
+        _old_string: &str,
+        _new_string: &str,
+        _replace_all: bool,
+    ) -> EditResult {
+        EditResult::err("not implemented: edit")
+    }
     /// 递归删除。
-    async fn delete(&self, _file_path: &str) -> DeleteResult { DeleteResult::err("not implemented: delete") }
+    async fn delete(&self, _file_path: &str) -> DeleteResult {
+        DeleteResult::err("not implemented: delete")
+    }
 
     /// 若 backend 支持沙箱执行则返回引用。capability gating 用（`execute` 工具据此暴露）。
-    fn as_sandbox(&self) -> Option<&dyn SandboxBackend> { None }
+    fn as_sandbox(&self) -> Option<&dyn SandboxBackend> {
+        None
+    }
 }
 
 /// 沙箱后端协议：扩展 `Backend` 加 shell 执行。

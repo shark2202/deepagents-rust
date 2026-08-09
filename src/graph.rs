@@ -8,20 +8,20 @@
 use std::sync::Arc;
 
 use futures::future::FutureExt;
+use juncture::JunctureError;
 use juncture::checkpoint::CheckpointSaver;
 use juncture::edge::{END, PathMap, RouteResult, Router};
-use juncture::graph::{CompiledGraph, StateGraph, TopologyError};
+use juncture::graph::{CompiledGraph, RetryPolicy, StateGraph, TopologyError};
 use juncture::llm::{CallOptions, ChatModel, Message, ToolDefinition as LlmToolDefinition};
 use juncture::node::NodeFnUpdate;
 use juncture::tools::{Tool, ToolDefinition as ToolsToolDefinition, ToolNode};
 use juncture::wasm_send::force_send;
-use juncture::JunctureError;
 
 use crate::middleware::{
     AnthropicPromptCachingMiddleware, MiddlewareChain, MiddlewareError, ModelRequest,
     PatchToolCallsMiddleware, SummarizationMiddleware,
 };
-use crate::profiles::{apply_profile_prompt, HarnessProfile};
+use crate::profiles::{HarnessProfile, apply_profile_prompt};
 use crate::state::{DeepAgentState, DeepAgentStateUpdate};
 
 /// 把 `tools::ToolDefinition` 转为 `llm::ToolDefinition`（同字段，不同类型，见 juncture `react.rs`）。
@@ -189,7 +189,7 @@ pub fn create_deep_agent<M: ChatModel>(
         system_prompt,
         middleware,
         profile,
-        checkpointer: _,
+        checkpointer,
     } = config;
 
     // 合并 caller tools + 各 middleware 提供的工具（如 FilesystemMiddleware 的 8 个 fs 工具）。
@@ -202,7 +202,8 @@ pub fn create_deep_agent<M: ChatModel>(
         .collect();
 
     // 全量工具定义（llm 格式）。中间件 wrap_model_call 在此基础上 per-call 过滤。
-    let all_tool_defs: Vec<ToolsToolDefinition> = all_tools.iter().map(|t| t.definition()).collect();
+    let all_tool_defs: Vec<ToolsToolDefinition> =
+        all_tools.iter().map(|t| t.definition()).collect();
     // 转为 llm 格式，并按 profile.tool_description_overrides 覆写 description（仅影响 LLM 可见描述）。
     let mut all_llm_tool_defs = convert_tool_defs(&all_tool_defs);
     if let Some(p) = &profile {
@@ -301,7 +302,18 @@ pub fn create_deep_agent<M: ChatModel>(
             let results = tool_node
                 .execute_with_state(&messages, Some(&state_owned))
                 .await
-                .map_err(|e| JunctureError::execution(e.to_string()))?;
+                .map_err(|e| {
+                    let msg = e.to_string();
+                    // HITL interrupt propagate：工具 check_interruptible 返 Err(ToolError) 含
+                    // "HITL interrupt"。转 JunctureError::interrupted（非 execution）——
+                    // RetryPolicy 不 retry interrupt → 不消耗 signal；interrupt_with_ctx! 已发
+                    // signal 到 channel，Pregel after_tick drain 检测 → InterruptAfter pause。
+                    if msg.contains("HITL interrupt") {
+                        JunctureError::interrupted(0)
+                    } else {
+                        JunctureError::execution(msg)
+                    }
+                })?;
             Ok(DeepAgentStateUpdate {
                 messages: Some(results),
             })
@@ -311,8 +323,12 @@ pub fn create_deep_agent<M: ChatModel>(
 
     // 组装图
     let mut graph = StateGraph::<DeepAgentState>::new();
+    // agent 节点走默认（单 task inline fast-path 足够；无 interrupt 需求）。
     graph.add_node_simple("agent", agent_node)?;
-    graph.add_node_simple("tools", tools_node)?;
+    // tools 节点配 retry —— 让 runner 走非 inline 路径（`INTERRUPT_CONTEXT.scope`），
+    // 使工具内 `interrupt_with_ctx!` 能取到 task-local 上下文、发出 interrupt signal。
+    // RetryPolicy 默认不 retry interrupt 错误，走非 inline 即达 scope 目的。
+    graph.add_node_with_retry("tools", tools_node, RetryPolicy::default())?;
     graph.set_entry_point("agent");
 
     let path_map = PathMap::from(&[("tools", "tools"), (END, END)][..]);
@@ -320,7 +336,7 @@ pub fn create_deep_agent<M: ChatModel>(
     graph.add_edge("tools", "agent");
 
     // TODO Phase 2: checkpointer 支持（compile_with_checkpointer）
-    graph.compile()
+    graph.compile_with_checkpointer(checkpointer)
 }
 
 /// 路由器：末消息有 tool_calls → `tools`，否则 END。
@@ -332,9 +348,7 @@ impl Router<DeepAgentState> for DeepAgentRouter {
         &self,
         state: &DeepAgentState,
     ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = Result<RouteResult, JunctureError>> + Send + '_,
-        >,
+        Box<dyn std::future::Future<Output = Result<RouteResult, JunctureError>> + Send + '_>,
     > {
         let target = state
             .messages
@@ -347,12 +361,12 @@ impl Router<DeepAgentState> for DeepAgentRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use crate::middleware::Middleware;
     use async_trait::async_trait;
     use juncture::llm::{Message, MockChatModel};
     use juncture::tools::{Tool, ToolError};
-    use serde_json::{json, Value};
-    use crate::middleware::Middleware;
+    use serde_json::{Value, json};
+    use std::sync::Mutex;
 
     #[test]
     fn build_compiles_empty() {

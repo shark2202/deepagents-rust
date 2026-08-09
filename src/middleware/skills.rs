@@ -264,7 +264,11 @@ fn fallback_meta(path: &Path, content: &str) -> (String, String) {
         .and_then(|n| n.to_str())
         .filter(|n| !n.is_empty())
         .map(str::to_string)
-        .or_else(|| path.file_stem().and_then(|s| s.to_str()).map(str::to_string))
+        .or_else(|| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .map(str::to_string)
+        })
         .unwrap_or_else(|| "skill".to_string());
     let description = content
         .lines()

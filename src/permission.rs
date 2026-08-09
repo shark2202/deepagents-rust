@@ -69,7 +69,11 @@ impl FilesystemPermission {
                 return Err(format!("path must not contain '~': {p}"));
             }
         }
-        Ok(Self { operations, paths, mode })
+        Ok(Self {
+            operations,
+            paths,
+            mode,
+        })
     }
 
     /// `deny` 规则快捷构造。
@@ -89,7 +93,10 @@ impl FilesystemPermission {
     /// `interrupt` 规则快捷构造（HITL defer）。
     /// # Errors
     /// 见 [`Self::new`]。
-    pub fn interrupt(operations: Vec<FilesystemOperation>, paths: Vec<String>) -> Result<Self, String> {
+    pub fn interrupt(
+        operations: Vec<FilesystemOperation>,
+        paths: Vec<String>,
+    ) -> Result<Self, String> {
         Self::new(operations, paths, PermissionMode::Interrupt)
     }
 }
@@ -141,27 +148,46 @@ mod tests {
     #[test]
     fn deny_wins_first_match() {
         let rules = vec![
-            FilesystemPermission::deny(vec![FilesystemOperation::Write], vec!["/secret/**".into()]).unwrap(),
-            FilesystemPermission::allow(vec![FilesystemOperation::Write], vec!["/**".into()]).unwrap(),
+            FilesystemPermission::deny(vec![FilesystemOperation::Write], vec!["/secret/**".into()])
+                .unwrap(),
+            FilesystemPermission::allow(vec![FilesystemOperation::Write], vec!["/**".into()])
+                .unwrap(),
         ];
-        assert_eq!(check_fs_permission(&rules, FilesystemOperation::Write, "/secret/x"), PermissionMode::Deny);
-        assert_eq!(check_fs_permission(&rules, FilesystemOperation::Write, "/public/x"), PermissionMode::Allow);
+        assert_eq!(
+            check_fs_permission(&rules, FilesystemOperation::Write, "/secret/x"),
+            PermissionMode::Deny
+        );
+        assert_eq!(
+            check_fs_permission(&rules, FilesystemOperation::Write, "/public/x"),
+            PermissionMode::Allow
+        );
     }
 
     #[test]
     fn operation_filter() {
         let rules = vec![
-            FilesystemPermission::deny(vec![FilesystemOperation::Write], vec!["/ro/**".into()]).unwrap(),
+            FilesystemPermission::deny(vec![FilesystemOperation::Write], vec!["/ro/**".into()])
+                .unwrap(),
         ];
         // write deny, read allow
-        assert_eq!(check_fs_permission(&rules, FilesystemOperation::Write, "/ro/x"), PermissionMode::Deny);
-        assert_eq!(check_fs_permission(&rules, FilesystemOperation::Read, "/ro/x"), PermissionMode::Allow);
+        assert_eq!(
+            check_fs_permission(&rules, FilesystemOperation::Write, "/ro/x"),
+            PermissionMode::Deny
+        );
+        assert_eq!(
+            check_fs_permission(&rules, FilesystemOperation::Read, "/ro/x"),
+            PermissionMode::Allow
+        );
     }
 
     #[test]
     fn interrupt_treated_as_allow_at_tool_level() {
         let rules = vec![
-            FilesystemPermission::interrupt(vec![FilesystemOperation::Write], vec!["/approve/**".into()]).unwrap(),
+            FilesystemPermission::interrupt(
+                vec![FilesystemOperation::Write],
+                vec!["/approve/**".into()],
+            )
+            .unwrap(),
         ];
         // 工具层 check_deny 视为 allow（HITL defer）
         assert!(check_deny(&rules, FilesystemOperation::Write, "/approve/x").is_ok());
@@ -169,17 +195,39 @@ mod tests {
 
     #[test]
     fn path_validation_rejects_dotdot() {
-        assert!(FilesystemPermission::deny(vec![FilesystemOperation::Write], vec!["/../x".into()]).is_err());
-        assert!(FilesystemPermission::deny(vec![FilesystemOperation::Write], vec!["relative/path".into()]).is_err());
+        assert!(
+            FilesystemPermission::deny(vec![FilesystemOperation::Write], vec!["/../x".into()])
+                .is_err()
+        );
+        assert!(
+            FilesystemPermission::deny(
+                vec![FilesystemOperation::Write],
+                vec!["relative/path".into()]
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn globstar_matches_recursively() {
         let rules = vec![
-            FilesystemPermission::deny(vec![FilesystemOperation::Read], vec!["/secret/**/*.env".into()]).unwrap(),
+            FilesystemPermission::deny(
+                vec![FilesystemOperation::Read],
+                vec!["/secret/**/*.env".into()],
+            )
+            .unwrap(),
         ];
-        assert_eq!(check_fs_permission(&rules, FilesystemOperation::Read, "/secret/sub/.env"), PermissionMode::Deny);
-        assert_eq!(check_fs_permission(&rules, FilesystemOperation::Read, "/secret/.env"), PermissionMode::Deny);
-        assert_eq!(check_fs_permission(&rules, FilesystemOperation::Read, "/secret/x.txt"), PermissionMode::Allow);
+        assert_eq!(
+            check_fs_permission(&rules, FilesystemOperation::Read, "/secret/sub/.env"),
+            PermissionMode::Deny
+        );
+        assert_eq!(
+            check_fs_permission(&rules, FilesystemOperation::Read, "/secret/.env"),
+            PermissionMode::Deny
+        );
+        assert_eq!(
+            check_fs_permission(&rules, FilesystemOperation::Read, "/secret/x.txt"),
+            PermissionMode::Allow
+        );
     }
 }

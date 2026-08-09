@@ -12,15 +12,15 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use deepagents::{
-    create_deep_agent, AgentRegistry, DeepAgentBuilder, DeepAgentConfig, DeepAgentState,
-    SubagentMiddleware,
+    AgentRegistry, DeepAgentBuilder, DeepAgentConfig, DeepAgentState, SubagentMiddleware,
+    create_deep_agent,
 };
+use juncture::RunnableConfig;
 use juncture::graph::CompiledGraph;
 use juncture::llm::{
     CallOptions, ChatModel, LlmError, Message, MessageChunk, MockChatModel, Role, ToolDefinition,
 };
 use juncture::state::messages::ToolCall;
-use juncture::RunnableConfig;
 use serde_json::json;
 
 /// 脚本模型（复制自 `tests/filesystem_tools_e2e.rs`，扩展记录首条 system message）：
@@ -348,11 +348,9 @@ async fn subagent_unknown_type_returns_error() {
         .expect("agent runs");
 
     // 断言：task 工具结果含 "Error: unknown subagent"（对齐 deepagents 未知类型报错约定）。
-    let has_err = out
-        .value
-        .messages
-        .iter()
-        .any(|m| matches!(m.role, Role::Tool) && m.content_text().contains("Error: unknown subagent"));
+    let has_err = out.value.messages.iter().any(|m| {
+        matches!(m.role, Role::Tool) && m.content_text().contains("Error: unknown subagent")
+    });
     assert!(
         has_err,
         "unknown subagent type should yield 'Error: unknown subagent' tool result"

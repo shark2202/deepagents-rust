@@ -30,10 +30,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use juncture::tools::{Tool, ToolError};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::backend::{Backend, FileInfo};
-use crate::permission::{check_fs_permission, FilesystemOperation, FilesystemPermission, PermissionMode};
+use crate::permission::{
+    FilesystemOperation, FilesystemPermission, PermissionMode, check_fs_permission,
+};
 
 // ===== helper =====
 
@@ -61,7 +63,10 @@ fn get_str(input: &Value, field: &str) -> Result<String, ToolError> {
 }
 
 fn get_opt_str(input: &Value, field: &str) -> Option<String> {
-    input.get(field).and_then(|v| v.as_str()).map(|s| s.to_string())
+    input
+        .get(field)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 fn get_opt_u64(input: &Value, field: &str) -> Option<u64> {
@@ -117,63 +122,50 @@ enum ResumeDecision {
     Invalid,
 }
 
-/// 权限 + HITL 检查：返回 `Some("Error: ...")` 则短路返回该串给模型；`None` 则继续 backend call。
+/// 权限 + HITL 检查：`Ok(None)` 继续 backend；`Ok(Some(s))` 短路返回 Ok(s) 给模型；
+/// `Err(ToolError)` propagate —— 让 ToolNode 失败、不产出 writes，Pregel 检测 interrupt
+/// signal 后 pause，resume 时重跑本节点，`interrupt_with_ctx!` 返回 Ok(resume_value)。
 ///
-/// - `Allow` → `None`（继续）
-/// - `Deny` → `Some("Error: permission denied for {op} on {path}")`
-/// - `Interrupt` → 取 Pregel task-local `InterruptContext`，调 `interrupt_with_ctx!`
-///   暂停；match resume decision：
-///   - `Approve` → `None`（继续 backend call）
-///   - `Reject` → `Some("Error: {tool} rejected by human")`
-///   - `Invalid` → `Some("Error: invalid resume decision")`
-///   - `Err`（task-local 未设 / interrupt channel 错误 / 首次 interrupt 已发信号）→
-///     `Some("Error: ...")`。Pregel 通过 after-superstep channel drain 检测 interrupt
-///     signal 并暂停，与工具返回值无关，故 catch `Err` 不影响 HITL 暂停语义。
+/// - `Allow` → `Ok(None)`
+/// - `Deny` → `Ok(Some("Error: permission denied..."))`
+/// - `Interrupt` → 取 task-local `InterruptContext`，调 `interrupt_with_ctx!`：
+///   - `Ok(resume)` → match decision: Approve→`Ok(None)`；Reject/Invalid→`Ok(Some(...))`
+///   - `Err(juncture_err)` → `Err(ToolError)` propagate（首次 interrupt 已发 signal，Pregel
+///     after_tick drain channel 检测 → InterruptAfter pause）
+///   - task-local 未设 → `Err(ToolError)` propagate（非 Pregel 上下文无 resume，工具失败）
 async fn check_interruptible(
     perms: &[FilesystemPermission],
     op: FilesystemOperation,
     path: &str,
     tool_name: &str,
-) -> Option<String> {
+) -> Result<Option<String>, ToolError> {
     match check_fs_permission(perms, op, path) {
-        PermissionMode::Allow => None,
-        PermissionMode::Deny => Some(format!("Error: permission denied for {op} on {path}")),
+        PermissionMode::Allow => Ok(None),
+        PermissionMode::Deny => Ok(Some(format!("Error: permission denied for {op} on {path}"))),
         PermissionMode::Interrupt => {
-            // payload 供 human 决策：tool/operation/path。
             let payload = json!({
                 "tool": tool_name,
                 "operation": op,
                 "path": path,
             });
-            // 取 Pregel task-local InterruptContext（runner 在 node 执行前 scope）。
-            // try_with 闭包不调 .await，仅 clone Arc → 可在非 async 闭包内编译。
             match juncture::interrupt::INTERRUPT_CONTEXT.try_with(Arc::clone) {
-                Ok(ctx) => {
-                    // interrupt_with_ctx! 直接调 __interrupt_impl(ctx, payload, None).await，
-                    // 无 try_with 闭包包裹 .await（对齐 juncture-core interrupt_tests 用法）。
-                    // 首次执行发 InterruptSignal 到 channel + 返 Err(interrupted)；
-                    // resume 后 Pregel 重跑 node，返 Ok(resume_value)。
-                    match juncture::interrupt_with_ctx!(&ctx, payload) {
-                        Ok(resume) => match parse_resume_decision(&resume) {
-                            ResumeDecision::Approve => None,
-                            ResumeDecision::Reject => {
-                                Some(format!("Error: {tool_name} rejected by human"))
-                            }
-                            ResumeDecision::Invalid => {
-                                Some("Error: invalid resume decision".to_string())
-                            }
-                        },
-                        // catch 所有 Err：首次 interrupt（已发信号，Pregel 将 drain
-                        // channel 暂停）/ channel 错误。不 panic，返回 Ok("Error: ...") 给模型。
-                        Err(e) => Some(format!("Error: HITL interrupt failed: {e}")),
-                    }
-                }
-                // task-local 未设（单元测试直接调 invoke / 非 Pregel 上下文）→
-                // 不 panic，返回 Ok("Error: ...") 给模型。
-                Err(_) => Some(
-                    "Error: HITL interrupt failed: interrupt context not set in task-local"
-                        .to_string(),
-                ),
+                Ok(ctx) => match juncture::interrupt_with_ctx!(&ctx, payload) {
+                    Ok(resume) => match parse_resume_decision(&resume) {
+                        ResumeDecision::Approve => Ok(None),
+                        ResumeDecision::Reject => {
+                            Ok(Some(format!("Error: {tool_name} rejected by human")))
+                        }
+                        ResumeDecision::Invalid => {
+                            Ok(Some("Error: invalid resume decision".to_string()))
+                        }
+                    },
+                    // propagate interrupt Err —— ToolNode 失败，不 merge writes，
+                    // Pregel after_tick drain channel 检测 signal → pause + resume 重跑。
+                    Err(e) => Err(ToolError::ExecutionFailed(format!("HITL interrupt: {e}"))),
+                },
+                Err(_) => Err(ToolError::ExecutionFailed(
+                    "HITL interrupt: context not set in task-local".to_string(),
+                )),
             }
         }
     }
@@ -190,7 +182,10 @@ pub struct LsTool {
 impl LsTool {
     #[must_use]
     pub fn new(backend: Arc<dyn Backend>, permissions: Arc<[FilesystemPermission]>) -> Self {
-        Self { backend, permissions }
+        Self {
+            backend,
+            permissions,
+        }
     }
 }
 
@@ -207,7 +202,7 @@ impl Tool for LsTool {
     }
     async fn invoke(&self, input: Value) -> Result<String, ToolError> {
         let path = get_str(&input, "path")?;
-        if let Some(e) = check_interruptible(
+        match check_interruptible(
             &self.permissions,
             FilesystemOperation::Read,
             &path,
@@ -215,12 +210,16 @@ impl Tool for LsTool {
         )
         .await
         {
-            return Ok(e);
+            Ok(None) => {}
+            Ok(Some(e)) => return Ok(e),
+            Err(e) => return Err(e),
         }
         let r = self.backend.ls(&path).await;
         match r.error {
             Some(e) => Ok(err_str(e)),
-            None => Ok(format_paths(paths_from_infos(r.entries.unwrap_or_default()))),
+            None => Ok(format_paths(paths_from_infos(
+                r.entries.unwrap_or_default(),
+            ))),
         }
     }
 }
@@ -236,7 +235,10 @@ pub struct ReadFileTool {
 impl ReadFileTool {
     #[must_use]
     pub fn new(backend: Arc<dyn Backend>, permissions: Arc<[FilesystemPermission]>) -> Self {
-        Self { backend, permissions }
+        Self {
+            backend,
+            permissions,
+        }
     }
 }
 
@@ -253,7 +255,7 @@ impl Tool for ReadFileTool {
     }
     async fn invoke(&self, input: Value) -> Result<String, ToolError> {
         let file_path = get_str(&input, "file_path")?;
-        if let Some(e) = check_interruptible(
+        match check_interruptible(
             &self.permissions,
             FilesystemOperation::Read,
             &file_path,
@@ -261,7 +263,9 @@ impl Tool for ReadFileTool {
         )
         .await
         {
-            return Ok(e);
+            Ok(None) => {}
+            Ok(Some(e)) => return Ok(e),
+            Err(e) => return Err(e),
         }
         let offset = get_opt_u64(&input, "offset").unwrap_or(0) as usize;
         let limit = get_opt_u64(&input, "limit").unwrap_or(100) as usize;
@@ -299,7 +303,10 @@ pub struct WriteFileTool {
 impl WriteFileTool {
     #[must_use]
     pub fn new(backend: Arc<dyn Backend>, permissions: Arc<[FilesystemPermission]>) -> Self {
-        Self { backend, permissions }
+        Self {
+            backend,
+            permissions,
+        }
     }
 }
 
@@ -316,7 +323,7 @@ impl Tool for WriteFileTool {
     }
     async fn invoke(&self, input: Value) -> Result<String, ToolError> {
         let file_path = get_str(&input, "file_path")?;
-        if let Some(e) = check_interruptible(
+        match check_interruptible(
             &self.permissions,
             FilesystemOperation::Write,
             &file_path,
@@ -324,7 +331,9 @@ impl Tool for WriteFileTool {
         )
         .await
         {
-            return Ok(e);
+            Ok(None) => {}
+            Ok(Some(e)) => return Ok(e),
+            Err(e) => return Err(e),
         }
         let content = get_str(&input, "content")?;
         let r = self.backend.write(&file_path, &content).await;
@@ -347,7 +356,10 @@ pub struct EditFileTool {
 impl EditFileTool {
     #[must_use]
     pub fn new(backend: Arc<dyn Backend>, permissions: Arc<[FilesystemPermission]>) -> Self {
-        Self { backend, permissions }
+        Self {
+            backend,
+            permissions,
+        }
     }
 }
 
@@ -364,7 +376,7 @@ impl Tool for EditFileTool {
     }
     async fn invoke(&self, input: Value) -> Result<String, ToolError> {
         let file_path = get_str(&input, "file_path")?;
-        if let Some(e) = check_interruptible(
+        match check_interruptible(
             &self.permissions,
             FilesystemOperation::Write,
             &file_path,
@@ -372,7 +384,9 @@ impl Tool for EditFileTool {
         )
         .await
         {
-            return Ok(e);
+            Ok(None) => {}
+            Ok(Some(e)) => return Ok(e),
+            Err(e) => return Err(e),
         }
         let old_string = get_str(&input, "old_string")?;
         let new_string = get_str(&input, "new_string")?;
@@ -383,7 +397,9 @@ impl Tool for EditFileTool {
             .await;
         match (r.error, r.path, r.occurrences) {
             (Some(e), _, _) => Ok(err_str(e)),
-            (None, Some(p), Some(n)) => Ok(format!("Successfully replaced {n} instance(s) of the string in '{p}'")),
+            (None, Some(p), Some(n)) => Ok(format!(
+                "Successfully replaced {n} instance(s) of the string in '{p}'"
+            )),
             _ => Ok("Error: edit returned no result".to_string()),
         }
     }
@@ -400,7 +416,10 @@ pub struct GlobTool {
 impl GlobTool {
     #[must_use]
     pub fn new(backend: Arc<dyn Backend>, permissions: Arc<[FilesystemPermission]>) -> Self {
-        Self { backend, permissions }
+        Self {
+            backend,
+            permissions,
+        }
     }
 }
 
@@ -420,7 +439,7 @@ impl Tool for GlobTool {
         let path = get_opt_str(&input, "path");
         // permission check on base path（对齐 deepagents: validate_path(path or "/")）
         let perm_path = path.as_deref().unwrap_or("/");
-        if let Some(e) = check_interruptible(
+        match check_interruptible(
             &self.permissions,
             FilesystemOperation::Read,
             perm_path,
@@ -428,7 +447,9 @@ impl Tool for GlobTool {
         )
         .await
         {
-            return Ok(e);
+            Ok(None) => {}
+            Ok(Some(e)) => return Ok(e),
+            Err(e) => return Err(e),
         }
         let r = self.backend.glob(&pattern, path.as_deref()).await;
         if let Some(e) = r.error {
@@ -454,7 +475,10 @@ pub struct GrepTool {
 impl GrepTool {
     #[must_use]
     pub fn new(backend: Arc<dyn Backend>, permissions: Arc<[FilesystemPermission]>) -> Self {
-        Self { backend, permissions }
+        Self {
+            backend,
+            permissions,
+        }
     }
 }
 
@@ -473,19 +497,18 @@ impl Tool for GrepTool {
         let pattern = get_str(&input, "pattern")?;
         let path = get_opt_str(&input, "path");
         let glob = get_opt_str(&input, "glob");
-        let output_mode = get_opt_str(&input, "output_mode").unwrap_or_else(|| "files_with_matches".to_string());
+        let output_mode =
+            get_opt_str(&input, "output_mode").unwrap_or_else(|| "files_with_matches".to_string());
         let max_count = get_opt_u64(&input, "max_count").map(|n| n as usize);
         // permission check：仅当 path is Some（对齐 deepagents：path=None 时不 pre-check，走 post-filter）
-        if let Some(p) = &path
-            && let Some(e) = check_interruptible(
-                &self.permissions,
-                FilesystemOperation::Read,
-                p,
-                self.name(),
-            )
-            .await
-        {
-            return Ok(e);
+        if let Some(p) = &path {
+            match check_interruptible(&self.permissions, FilesystemOperation::Read, p, self.name())
+                .await
+            {
+                Ok(None) => {}
+                Ok(Some(e)) => return Ok(e),
+                Err(e) => return Err(e),
+            }
         }
         let r = self
             .backend
@@ -502,7 +525,11 @@ impl Tool for GrepTool {
                 for m in &matches {
                     *counts.entry(m.path.clone()).or_default() += 1;
                 }
-                counts.into_iter().map(|(p, n)| format!("{p}:{n}")).collect::<Vec<_>>().join("\n")
+                counts
+                    .into_iter()
+                    .map(|(p, n)| format!("{p}:{n}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
             }
             "content" => matches
                 .iter()
@@ -542,7 +569,10 @@ pub struct DeleteTool {
 impl DeleteTool {
     #[must_use]
     pub fn new(backend: Arc<dyn Backend>, permissions: Arc<[FilesystemPermission]>) -> Self {
-        Self { backend, permissions }
+        Self {
+            backend,
+            permissions,
+        }
     }
 }
 
@@ -560,7 +590,7 @@ impl Tool for DeleteTool {
     async fn invoke(&self, input: Value) -> Result<String, ToolError> {
         let file_path = get_str(&input, "file_path")?;
         // deepagents 用 conservative subtree check（_find_delete_deny_patterns）；MVP 简化为 check_fs_permission on file_path。
-        if let Some(e) = check_interruptible(
+        match check_interruptible(
             &self.permissions,
             FilesystemOperation::Write,
             &file_path,
@@ -568,7 +598,9 @@ impl Tool for DeleteTool {
         )
         .await
         {
-            return Ok(e);
+            Ok(None) => {}
+            Ok(Some(e)) => return Ok(e),
+            Err(e) => return Err(e),
         }
         let r = self.backend.delete(&file_path).await;
         match (r.error, r.path) {
@@ -611,7 +643,9 @@ impl Tool for ExecuteTool {
         if let Some(t) = timeout
             && t > 3600
         {
-            return Ok(format!("Error: timeout {t}s exceeds maximum allowed (3600s)."));
+            return Ok(format!(
+                "Error: timeout {t}s exceeds maximum allowed (3600s)."
+            ));
         }
         let sandbox = match self.backend.as_sandbox() {
             Some(s) => s,
@@ -639,12 +673,30 @@ pub fn all_fs_tools(
 ) -> Vec<Box<dyn Tool>> {
     vec![
         Box::new(LsTool::new(Arc::clone(&backend), Arc::clone(&permissions))),
-        Box::new(ReadFileTool::new(Arc::clone(&backend), Arc::clone(&permissions))),
-        Box::new(WriteFileTool::new(Arc::clone(&backend), Arc::clone(&permissions))),
-        Box::new(EditFileTool::new(Arc::clone(&backend), Arc::clone(&permissions))),
-        Box::new(DeleteTool::new(Arc::clone(&backend), Arc::clone(&permissions))),
-        Box::new(GlobTool::new(Arc::clone(&backend), Arc::clone(&permissions))),
-        Box::new(GrepTool::new(Arc::clone(&backend), Arc::clone(&permissions))),
+        Box::new(ReadFileTool::new(
+            Arc::clone(&backend),
+            Arc::clone(&permissions),
+        )),
+        Box::new(WriteFileTool::new(
+            Arc::clone(&backend),
+            Arc::clone(&permissions),
+        )),
+        Box::new(EditFileTool::new(
+            Arc::clone(&backend),
+            Arc::clone(&permissions),
+        )),
+        Box::new(DeleteTool::new(
+            Arc::clone(&backend),
+            Arc::clone(&permissions),
+        )),
+        Box::new(GlobTool::new(
+            Arc::clone(&backend),
+            Arc::clone(&permissions),
+        )),
+        Box::new(GrepTool::new(
+            Arc::clone(&backend),
+            Arc::clone(&permissions),
+        )),
         Box::new(ExecuteTool::new(backend)),
     ]
 }
@@ -672,29 +724,32 @@ mod tests {
     }
 
     fn perm_interrupt() -> Arc<[FilesystemPermission]> {
-        vec![FilesystemPermission::interrupt(
-            vec![FilesystemOperation::Write],
-            vec!["/review/**".into()],
-        )
-        .unwrap()]
+        vec![
+            FilesystemPermission::interrupt(
+                vec![FilesystemOperation::Write],
+                vec!["/review/**".into()],
+            )
+            .unwrap(),
+        ]
         .into()
     }
 
     fn perm_deny() -> Arc<[FilesystemPermission]> {
-        vec![FilesystemPermission::deny(
-            vec![FilesystemOperation::Write],
-            vec!["/secret/**".into()],
-        )
-        .unwrap()]
+        vec![
+            FilesystemPermission::deny(vec![FilesystemOperation::Write], vec!["/secret/**".into()])
+                .unwrap(),
+        ]
         .into()
     }
 
     fn perm_allow_all() -> Arc<[FilesystemPermission]> {
-        vec![FilesystemPermission::allow(
-            vec![FilesystemOperation::Write, FilesystemOperation::Read],
-            vec!["/**".into()],
-        )
-        .unwrap()]
+        vec![
+            FilesystemPermission::allow(
+                vec![FilesystemOperation::Write, FilesystemOperation::Read],
+                vec!["/**".into()],
+            )
+            .unwrap(),
+        ]
         .into()
     }
 
@@ -745,18 +800,20 @@ mod tests {
     // --- Interrupt 无 Pregel task-local：catch Err 返回 Ok("Error:...")，不 panic ---
 
     #[tokio::test]
-    async fn interrupt_without_pregel_context_returns_error_not_panic() {
-        // 单元测试直接调 invoke，未在 Pregel node 内 → INTERRUPT_CONTEXT task-local
-        // 未设 → try_with 返回 Err(AccessError)。工具 catch 后返回 Ok("Error: ...")。
+    async fn interrupt_without_pregel_context_propagates_err_not_panic() {
+        // 单元测试直接调 invoke，未在 Pregel node 内 → INTERRUPT_CONTEXT task-local 未设 →
+        // try_with 返回 Err(AccessError) → 工具 propagate `Err(ToolError)`（让 Pregel pause；
+        // 非 Pregel 上下文工具失败合理——无 resume 机制）。不 panic。
         let backend = Arc::new(MockBackend::default());
         let tool = WriteFileTool::new(Arc::clone(&backend) as Arc<dyn Backend>, perm_interrupt());
         let r = tool
             .invoke(json!({"file_path": "/review/x", "content": "hi"}))
-            .await
-            .expect("catch Err → Ok(\"Error: ...\")，不 panic、不 propagate Err");
+            .await;
+        assert!(r.is_err(), "propagate Err 非 catch，got: {r:?}");
+        let err = r.unwrap_err();
         assert!(
-            r.starts_with("Error: HITL interrupt failed:"),
-            "无 task-local 时返回 HITL interrupt failed error，got: {r}"
+            format!("{err}").contains("context not set"),
+            "应含 context not set，got: {err}"
         );
         // backend 未触达。
         assert!(

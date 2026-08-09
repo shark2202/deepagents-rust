@@ -37,8 +37,7 @@ use crate::state::DeepAgentState;
 pub const DEFAULT_MAX_MESSAGES: usize = 50;
 
 /// 默认摘要提示（对应 deepagents `DEEPAGENTS_DEFAULT_SUMMARY_PROMPT` 风格）。
-pub const DEFAULT_SUMMARY_PROMPT: &str =
-    "Summarize the conversation so far. Distill the prior messages into a concise recap that \
+pub const DEFAULT_SUMMARY_PROMPT: &str = "Summarize the conversation so far. Distill the prior messages into a concise recap that \
      preserves key context, decisions, unresolved questions, and any in-flight work, so the agent \
      can continue effectively.";
 
@@ -171,8 +170,8 @@ mod tests {
     #[test]
     fn threshold_and_builder() {
         let model = MockChatModel::new("gpt-4");
-        let mw = SummarizationMiddleware::new(Arc::new(model), 7)
-            .with_summarize_prompt("custom prompt");
+        let mw =
+            SummarizationMiddleware::new(Arc::new(model), 7).with_summarize_prompt("custom prompt");
         assert_eq!(mw.threshold(), 7);
         assert_eq!(mw.summarize_prompt, "custom prompt");
     }

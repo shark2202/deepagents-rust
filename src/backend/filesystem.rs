@@ -48,7 +48,15 @@ impl FilesystemBackend {
 impl Backend for FilesystemBackend {
     fn supported_tools(&self) -> Vec<&'static str> {
         // execute 由 SandboxBackend 提供；FilesystemBackend 非 sandbox。
-        vec!["ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep"]
+        vec![
+            "ls",
+            "read_file",
+            "write_file",
+            "edit_file",
+            "delete",
+            "glob",
+            "grep",
+        ]
     }
 
     async fn ls(&self, path: &str) -> LsResult {
@@ -92,7 +100,11 @@ impl Backend for FilesystemBackend {
             // 非正 limit：短路，文件未检视。
             return ReadResult {
                 error: None,
-                file_data: Some(FileData { content: String::new(), encoding: "utf-8".to_string(), ..Default::default() }),
+                file_data: Some(FileData {
+                    content: String::new(),
+                    encoding: "utf-8".to_string(),
+                    ..Default::default()
+                }),
                 total_lines: None,
                 start_line: None,
                 end_line: None,
@@ -102,10 +114,24 @@ impl Backend for FilesystemBackend {
         }
         let start = offset.min(total);
         let end = (start + limit).min(total);
-        let window: Vec<&str> = if start < end { lines[start..end].to_vec() } else { Vec::new() };
-        let file_data = FileData { content: window.join("\n"), encoding: "utf-8".to_string(), ..Default::default() };
+        let window: Vec<&str> = if start < end {
+            lines[start..end].to_vec()
+        } else {
+            Vec::new()
+        };
+        let file_data = FileData {
+            content: window.join("\n"),
+            encoding: "utf-8".to_string(),
+            ..Default::default()
+        };
         if end > start {
-            ReadResult::ok(file_data, total, start + 1, end, (end < total).then_some(end))
+            ReadResult::ok(
+                file_data,
+                total,
+                start + 1,
+                end,
+                (end < total).then_some(end),
+            )
         } else {
             // 空文件或窗口为空
             ReadResult {
@@ -134,7 +160,13 @@ impl Backend for FilesystemBackend {
         }
     }
 
-    async fn edit(&self, file_path: &str, old_string: &str, new_string: &str, replace_all: bool) -> EditResult {
+    async fn edit(
+        &self,
+        file_path: &str,
+        old_string: &str,
+        new_string: &str,
+        replace_all: bool,
+    ) -> EditResult {
         let f = match self.resolve(file_path) {
             Ok(p) => p,
             Err(e) => return EditResult::err(e),
@@ -151,7 +183,9 @@ impl Backend for FilesystemBackend {
             return EditResult::err("old_string not found");
         }
         if count > 1 && !replace_all {
-            return EditResult::err("old_string is not unique; pass replace_all=true to replace all");
+            return EditResult::err(
+                "old_string is not unique; pass replace_all=true to replace all",
+            );
         }
         let new_content = if replace_all {
             content.replace(old_string, new_string)
@@ -194,10 +228,17 @@ impl Backend for FilesystemBackend {
             Err(e) => return GlobResult::err(e.to_string()),
         };
         let mut matches = Vec::new();
-        for entry in WalkDir::new(&base).into_iter().filter_map(std::result::Result::ok) {
+        for entry in WalkDir::new(&base)
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+        {
             let p = entry.path();
             // 匹配相对于 root 的路径或绝对路径
-            let rel = p.strip_prefix(&self.root).unwrap_or(p).to_string_lossy().replace('\\', "/");
+            let rel = p
+                .strip_prefix(&self.root)
+                .unwrap_or(p)
+                .to_string_lossy()
+                .replace('\\', "/");
             if glob.is_match(&rel) || glob.is_match(p) {
                 let meta = entry.metadata().ok();
                 matches.push(FileInfo {
@@ -211,7 +252,13 @@ impl Backend for FilesystemBackend {
         GlobResult::ok(matches)
     }
 
-    async fn grep(&self, pattern: &str, path: Option<&str>, glob_filter: Option<&str>, max_count: Option<usize>) -> GrepResult {
+    async fn grep(
+        &self,
+        pattern: &str,
+        path: Option<&str>,
+        glob_filter: Option<&str>,
+        max_count: Option<usize>,
+    ) -> GrepResult {
         let base = match path {
             Some(p) => match self.resolve(p) {
                 Ok(p) => p,
@@ -228,12 +275,19 @@ impl Backend for FilesystemBackend {
         };
         let cap = max_count.unwrap_or(usize::MAX);
         let mut matches: Vec<GrepMatch> = Vec::new();
-        for entry in WalkDir::new(&base).into_iter().filter_map(std::result::Result::ok) {
+        for entry in WalkDir::new(&base)
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+        {
             if !entry.file_type().is_file() {
                 continue;
             }
             let p = entry.path();
-            let rel = p.strip_prefix(&self.root).unwrap_or(p).to_string_lossy().replace('\\', "/");
+            let rel = p
+                .strip_prefix(&self.root)
+                .unwrap_or(p)
+                .to_string_lossy()
+                .replace('\\', "/");
             if let Some(gm) = &glob_matcher
                 && !gm.is_match(&rel)
                 && !gm.is_match(p)
@@ -411,7 +465,12 @@ mod tests {
         b.write("/b.txt", "2").await;
         let r = b.ls("/").await;
         assert!(r.error.is_none());
-        let paths: Vec<String> = r.entries.expect("entries").into_iter().map(|e| e.path).collect();
+        let paths: Vec<String> = r
+            .entries
+            .expect("entries")
+            .into_iter()
+            .map(|e| e.path)
+            .collect();
         assert!(paths.iter().any(|p| p.contains("a.txt")));
         assert!(paths.iter().any(|p| p.contains("b.txt")));
     }

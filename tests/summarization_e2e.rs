@@ -28,11 +28,13 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use deepagents::{DeepAgentBuilder, DeepAgentState, SummarizationMiddleware};
-use juncture::llm::{CallOptions, ChatModel, LlmError, Message, MessageChunk, Role, ToolDefinition};
+use juncture::RunnableConfig;
+use juncture::llm::{
+    CallOptions, ChatModel, LlmError, Message, MessageChunk, Role, ToolDefinition,
+};
 use juncture::state::messages::ToolCall;
 use juncture::tools::{Tool, ToolError};
-use juncture::RunnableConfig;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 // ============================================================================
 // ScriptedModel —— 计数 invoke + 区分摘要轮 vs 主对话轮
@@ -122,7 +124,10 @@ impl ChatModel for SummarizationScriptedModel {
 
         // 记录首条消息 role（断言调用顺序）。
         let role = Self::first_role_str(messages.first());
-        self.first_roles.lock().expect("lock").push(role.to_string());
+        self.first_roles
+            .lock()
+            .expect("lock")
+            .push(role.to_string());
 
         if Self::is_summary_call(messages) {
             // 摘要轮：返回 "[summary]"。（与 recent 拼装成 [ai("[summary]"), ...recent]）
@@ -180,10 +185,7 @@ impl Tool for EchoTool {
     }
 
     async fn invoke(&self, input: Value) -> Result<String, ToolError> {
-        let text = input
-            .get("text")
-            .and_then(|v| v.as_str())
-            .unwrap_or("echo");
+        let text = input.get("text").and_then(|v| v.as_str()).unwrap_or("echo");
         Ok(format!("echoed: {text}"))
     }
 }
@@ -213,10 +215,7 @@ async fn summarization_folds_old_messages_via_remove_all_sentinel() {
     // 主 agent 与摘要中间件共用同一 model（clone 共享 Arc 计数器）。
     // 不设 system_prompt → 主对话调用无 system 前缀 → 首条消息非 System → 与摘要轮可区分。
     let agent = DeepAgentBuilder::new(model.clone())
-        .middleware_one(SummarizationMiddleware::new(
-            Arc::new(model.clone()),
-            3,
-        ))
+        .middleware_one(SummarizationMiddleware::new(Arc::new(model.clone()), 3))
         .build()
         .expect("agent builds");
 
@@ -358,10 +357,7 @@ async fn summarization_triggers_during_multi_turn_react_loop() {
 
     let agent = DeepAgentBuilder::new(model.clone())
         .tool(echo)
-        .middleware_one(SummarizationMiddleware::new(
-            Arc::new(model.clone()),
-            3,
-        ))
+        .middleware_one(SummarizationMiddleware::new(Arc::new(model.clone()), 3))
         .build()
         .expect("agent builds");
 
@@ -471,10 +467,7 @@ async fn summarization_noop_under_threshold_preserves_all_messages() {
     ]);
 
     let agent = DeepAgentBuilder::new(model.clone())
-        .middleware_one(SummarizationMiddleware::new(
-            Arc::new(model.clone()),
-            5,
-        ))
+        .middleware_one(SummarizationMiddleware::new(Arc::new(model.clone()), 5))
         .build()
         .expect("agent builds");
 
@@ -494,7 +487,11 @@ async fn summarization_noop_under_threshold_preserves_all_messages() {
 
     // 调用首条 = human（state.messages[0]，无 system 前缀）。
     let roles = model.first_roles();
-    assert_eq!(roles, vec!["human"], "single main call, human first: {roles:?}");
+    assert_eq!(
+        roles,
+        vec!["human"],
+        "single main call, human first: {roles:?}"
+    );
 
     // 原始消息全保留 + response。
     assert_eq!(msgs.len(), 3, "2 original + 1 response = 3");
@@ -556,7 +553,10 @@ async fn without_summarization_messages_grow_unbounded() {
     for i in 0..6 {
         let old = format!("msg {i}");
         let present = msgs.iter().any(|m| m.content_text() == old);
-        assert!(present, "msg {i} should still be present without summarization");
+        assert!(
+            present,
+            "msg {i} should still be present without summarization"
+        );
     }
 
     // 无 summary 消息。

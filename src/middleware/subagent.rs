@@ -18,11 +18,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use juncture::RunnableConfig;
 use juncture::graph::CompiledGraph;
 use juncture::llm::{Message, Role};
 use juncture::tools::{Tool, ToolError};
-use juncture::RunnableConfig;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::middleware::{Middleware, MiddlewareError, ModelRequest};
 use crate::state::DeepAgentState;
@@ -142,7 +142,10 @@ impl Tool for TaskTool {
 
         // 用 `RunnableConfig::new()`（recursion_limit=25）；`Default` 的 0 会让 ReAct 多步循环
         // 立即触顶，故不用 `default()`。
-        let out = match compiled.invoke_async(fresh_state, &RunnableConfig::new()).await {
+        let out = match compiled
+            .invoke_async(fresh_state, &RunnableConfig::new())
+            .await
+        {
             Ok(o) => o,
             Err(e) => return Ok(format!("Error: {e}")),
         };

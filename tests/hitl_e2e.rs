@@ -45,19 +45,21 @@
 //!    inline fast-path（`runner.rs:99` `node.call_arc` 无 `INTERRUPT_CONTEXT.scope`）→
 //!    实际命中 "interrupt context not set" 路径，interrupt signal 从未发出。
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use deepagents::middleware::fs_tools::WriteFileTool;
 use deepagents::{
-    check_fs_permission, Backend, DeepAgentBuilder, DeepAgentState, FilesystemBackend,
-    FilesystemMiddleware, FilesystemOperation, FilesystemPermission, PermissionMode,
+    Backend, DeepAgentBuilder, DeepAgentState, FilesystemBackend, FilesystemMiddleware,
+    FilesystemOperation, FilesystemPermission, PermissionMode, check_fs_permission,
 };
-use juncture::llm::{CallOptions, ChatModel, LlmError, Message, MessageChunk, Role, ToolDefinition};
+use juncture::RunnableConfig;
+use juncture::llm::{
+    CallOptions, ChatModel, LlmError, Message, MessageChunk, Role, ToolDefinition,
+};
 use juncture::state::messages::ToolCall;
 use juncture::tools::Tool;
-use juncture::RunnableConfig;
 use serde_json::json;
 
 /// 脚本模型：按序返回预设 turns（content + tool_calls）。
@@ -152,12 +154,11 @@ fn interrupt_permission_resolves_via_check_fs_permission() {
 }
 
 /// 非 Pregel 上下文直接调 `WriteFileTool::invoke`（interrupt 权限）：
-/// `INTERRUPT_CONTEXT` task-local 未设 → `try_with` 返 `Err(AccessError)` → 工具 catch，
-/// 返 `Ok("Error: HITL interrupt failed: interrupt context not set in task-local")`，
-/// 不 panic、不触达 backend（文件不创建）。验证公开 API surface（`WriteFileTool` 可直接
-/// 构造 + invoke）+ catch-Err 安全性（对齐 fs_tools 单测 `interrupt_without_pregel_context_...`）。
+/// `INTERRUPT_CONTEXT` task-local 未设 → `try_with` 返 `Err(AccessError)` → 工具 **propagate
+/// `Err(ToolError)`**（非 catch——让 Pregel pause；非 Pregel 上下文工具失败合理，无 resume 机制）。
+/// 不 panic、不触达 backend。验证公开 API surface + propagate-Err 安全性。
 #[tokio::test]
-async fn write_file_tool_interrupt_outside_pregel_is_caught_not_panic() {
+async fn write_file_tool_interrupt_outside_pregel_propagates_err_not_panic() {
     let tmp = tempfile::tempdir().expect("tmp");
     let backend = Arc::new(FilesystemBackend::new(tmp.path())) as Arc<dyn Backend>;
     let perms: Arc<[FilesystemPermission]> = vec![
@@ -172,18 +173,14 @@ async fn write_file_tool_interrupt_outside_pregel_is_caught_not_panic() {
 
     let r = tool
         .invoke(json!({"file_path":"/secret/x.txt","content":"data"}))
-        .await
-        .expect("invoke returns Ok（catch Err → 不 panic、不 propagate）");
+        .await;
 
-    // 含 HITL interrupt failed 前缀（工具的 catch 分支）。
+    // propagate Err（非 Ok catch）。
+    assert!(r.is_err(), "非 Pregel 应 propagate Err，got: {r:?}");
+    let err_msg = format!("{}", r.unwrap_err());
     assert!(
-        r.contains("HITL interrupt failed"),
-        "应含 HITL interrupt failed 前缀，got: {r}"
-    );
-    // 非 Pregel → task-local 未设 → "context not set" 路径。
-    assert!(
-        r.contains("context not set"),
-        "非 Pregel 应是 context not set 路径，got: {r}"
+        err_msg.contains("context not set"),
+        "非 Pregel 应含 context not set，got: {err_msg}"
     );
     // 短路在 permission/interrupt 检查，backend.write 未触达。
     assert!(
@@ -231,40 +228,32 @@ async fn interrupt_permission_blocks_write_in_deep_agent_e2e() {
         ("done".into(), vec![]),
     ]);
 
+    let saver = Arc::new(juncture_checkpoint::MemorySaver::new())
+        as Arc<dyn juncture::checkpoint::CheckpointSaver>;
     let agent = DeepAgentBuilder::new(model)
         .middleware_one(FilesystemMiddleware::with_permissions(backend, perms))
+        .checkpointer(saver)
         .build()
         .expect("agent builds");
 
     let state = DeepAgentState {
         messages: vec![Message::human("write data to /secret/x.txt")],
     };
-    let out = agent
-        .invoke_async(state, &RunnableConfig::new())
-        .await
-        .expect("agent runs（工具 catch-Err 返 Ok，不 propagate Err）");
+    let cfg = RunnableConfig::new().with_thread_id("hitl-test");
+    let _out = agent.invoke_async(state, &cfg).await.expect("invoke runs");
 
-    // 断言1：文件未创建——interrupt 分支短路在 backend.write 之前。
+    // 断言1：文件未创建——工具 propagate Err → ToolNode 失败不 merge writes → write 阻断。
+    //
+    // 注（诚实 gap）：完整 Pregel pause+resume 仍未通——即使 wire checkpointer (A) +
+    // 工具节点配 retry 走非 inline runner (C) + propagate Err (B)，interrupt signal 仍未
+    // drain 到 LoopStatus::InterruptAfter（invoke 返 Ok + interrupts 空）。根因在 juncture
+    // runtime 深层：runner 非 inline 路径的 INTERRUPT_CONTEXT.interrupt_tx channel 与
+    // Pregel loop after_tick drain 的关联需进一步调试，超出本次 src 修复范围。
+    // 当前 HITL = 工具层 interrupt 检测 + propagate 阻断 write（文件不创建），非 pause+resume。
+    // 完整 pause+resume（resume(approve) → 文件创建 / resume(reject) → "rejected"）defer。
     assert!(
         !tmp.path().join("secret/x.txt").exists(),
-        "interrupt 应阻断 write，文件不应创建"
-    );
-
-    // 断言2：工具结果含 "HITL interrupt failed"——证明走了 Interrupt 分支（非 Allow 直通、
-    // 非 Deny 的 "permission denied"）。具体子串（"context not set" vs "Interrupted at
-    // index N"）取决于 runner 路径，不断言以保持稳健。
-    let hitl_result = out.value.messages.iter().find(|m| {
-        matches!(m.role, Role::Tool) && m.content_text().contains("HITL interrupt failed")
-    });
-    assert!(
-        hitl_result.is_some(),
-        "应有 HITL interrupt failed 工具结果（Interrupt 分支触发），messages: {:?}",
-        out
-            .value
-            .messages
-            .iter()
-            .map(|m| (format!("{:?}", m.role), m.content_text().to_string()))
-            .collect::<Vec<_>>()
+        "interrupt 应阻断 write，文件不应创建（工具 propagate Err 阻断）"
     );
 }
 

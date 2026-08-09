@@ -38,7 +38,7 @@ use juncture::graph::RemoteGraph;
 use juncture::llm::{Message, Role};
 use juncture::tools::{Tool, ToolError};
 use juncture::{ClientError, InvokeConfig};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::middleware::{Middleware, MiddlewareError, ModelRequest};
 use crate::state::DeepAgentState;
@@ -417,7 +417,11 @@ impl Tool for CancelAsyncTaskTool {
         };
         // 已终结：幂等返回当前状态（不重复 abort）。
         if !matches!(entry.status, AsyncTaskStatus::Running) {
-            return Ok(format!("{}: task {task_id} already {}", entry.status.as_str(), entry.status.as_str()));
+            return Ok(format!(
+                "{}: task {task_id} already {}",
+                entry.status.as_str(),
+                entry.status.as_str()
+            ));
         }
         // take 出 JoinHandle 并 abort（中断后台 invoke future）。guard 在返回时自然释放
         // （返回值不借用 entry/guard），故无需显式 drop。
@@ -463,8 +467,18 @@ impl Tool for ListAsyncTasksTool {
         let out = entries
             .into_iter()
             .map(|(id, e)| {
-                let task_preview = if e.task.len() > 60 { format!("{}…", &e.task[..60]) } else { e.task.clone() };
-                format!("{}\t{}\t{}\t{}", id, e.subagent_type, task_preview, e.status.as_str())
+                let task_preview = if e.task.len() > 60 {
+                    format!("{}…", &e.task[..60])
+                } else {
+                    e.task.clone()
+                };
+                format!(
+                    "{}\t{}\t{}\t{}",
+                    id,
+                    e.subagent_type,
+                    task_preview,
+                    e.status.as_str()
+                )
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -537,7 +551,10 @@ mod tests {
         let mut state = DeepAgentState { messages: vec![] };
         let mut req = make_req();
         mw.wrap_model_call(&mut req, &mut state).await.unwrap();
-        assert!(req.system_message.contains("Available async sub-agents: researcher"));
+        assert!(
+            req.system_message
+                .contains("Available async sub-agents: researcher")
+        );
         assert!(req.system_message.contains("start_async_task"));
         assert!(req.system_message.contains("check_async_task"));
     }

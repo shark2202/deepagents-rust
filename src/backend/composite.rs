@@ -70,13 +70,19 @@ impl Backend for CompositeBackend {
         self.route_for_path(path).ls(path).await
     }
     async fn read(&self, file_path: &str, offset: usize, limit: usize) -> ReadResult {
-        self.route_for_path(file_path).read(file_path, offset, limit).await
+        self.route_for_path(file_path)
+            .read(file_path, offset, limit)
+            .await
     }
     async fn write(&self, file_path: &str, content: &str) -> WriteResult {
-        self.route_for_path(file_path).write(file_path, content).await
+        self.route_for_path(file_path)
+            .write(file_path, content)
+            .await
     }
     async fn edit(&self, file_path: &str, old: &str, new: &str, replace_all: bool) -> EditResult {
-        self.route_for_path(file_path).edit(file_path, old, new, replace_all).await
+        self.route_for_path(file_path)
+            .edit(file_path, old, new, replace_all)
+            .await
     }
     async fn delete(&self, file_path: &str) -> DeleteResult {
         self.route_for_path(file_path).delete(file_path).await
@@ -85,9 +91,17 @@ impl Backend for CompositeBackend {
         let base = path.unwrap_or("/");
         self.route_for_path(base).glob(pattern, path).await
     }
-    async fn grep(&self, pattern: &str, path: Option<&str>, glob: Option<&str>, max_count: Option<usize>) -> GrepResult {
+    async fn grep(
+        &self,
+        pattern: &str,
+        path: Option<&str>,
+        glob: Option<&str>,
+        max_count: Option<usize>,
+    ) -> GrepResult {
         let base = path.unwrap_or("/");
-        self.route_for_path(base).grep(pattern, path, glob, max_count).await
+        self.route_for_path(base)
+            .grep(pattern, path, glob, max_count)
+            .await
     }
 
     fn as_sandbox(&self) -> Option<&dyn SandboxBackend> {
@@ -98,8 +112,8 @@ impl Backend for CompositeBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::{FilesystemBackend, LocalShellBackend};
+    use super::*;
 
     #[tokio::test]
     async fn routes_file_ops_longest_prefix() {

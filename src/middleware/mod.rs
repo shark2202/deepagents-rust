@@ -11,15 +11,15 @@
 //! `CallOptions` 无 `tools` 字段——无法承载 deepagents 的 per-call tool 过滤等拦截语义，
 //! 故自建本 trait。juncture runtime（`StateGraph`/Pregel/`Command`/`Node`）仍照常使用。
 
+pub mod async_subagent;
 pub mod filesystem;
 pub mod fs_tools;
 pub mod memory;
 pub mod patch_tool_calls;
+pub mod prompt_caching;
 pub mod skills;
 pub mod subagent;
 pub mod summarization;
-pub mod prompt_caching;
-pub mod async_subagent;
 
 // 子模块 pub 类型 re-export，便于 `crate::middleware::X` 路径访问。
 pub use async_subagent::AsyncSubAgentMiddleware;

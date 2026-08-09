@@ -11,9 +11,11 @@
 use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 
-use deepagents::{Backend, DeepAgentBuilder, DeepAgentState, FilesystemBackend, FilesystemMiddleware};
-use juncture::llm::{ChatModel, Message};
+use deepagents::{
+    Backend, DeepAgentBuilder, DeepAgentState, FilesystemBackend, FilesystemMiddleware,
+};
 use juncture::RunnableConfig;
+use juncture::llm::{ChatModel, Message};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -30,8 +32,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         eprintln!("[deepagents demo] no OPENAI_API_KEY/ANTHROPIC_API_KEY; using MockChatModel");
         eprintln!("[deepagents demo] (real LLM needs env keys; mock returns fixed reply)");
-        let m = juncture::llm::MockChatModel::new("mock")
-            .with_response("I'm a mock model. Set OPENAI_API_KEY or ANTHROPIC_API_KEY for real LLM.");
+        let m = juncture::llm::MockChatModel::new("mock").with_response(
+            "I'm a mock model. Set OPENAI_API_KEY or ANTHROPIC_API_KEY for real LLM.",
+        );
         run_repl(m).await?;
     }
     Ok(())

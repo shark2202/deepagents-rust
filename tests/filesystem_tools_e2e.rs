@@ -9,9 +9,11 @@ use deepagents::{
     Backend, DeepAgentBuilder, DeepAgentState, FilesystemBackend, FilesystemMiddleware,
     FilesystemOperation, FilesystemPermission,
 };
-use juncture::llm::{CallOptions, ChatModel, LlmError, Message, MessageChunk, Role, ToolDefinition};
-use juncture::state::messages::ToolCall;
 use juncture::RunnableConfig;
+use juncture::llm::{
+    CallOptions, ChatModel, LlmError, Message, MessageChunk, Role, ToolDefinition,
+};
+use juncture::state::messages::ToolCall;
 use serde_json::json;
 
 /// 脚本模型：按序返回预设 turns（content + tool_calls），同时记录 bind_tools 收到的 tool 名。
@@ -33,7 +35,11 @@ impl ScriptedModel {
 
     fn next_turn(&self) -> (String, Vec<ToolCall>) {
         let i = self.index.fetch_add(1, Ordering::Relaxed);
-        self.turns.get(i).or_else(|| self.turns.last()).cloned().unwrap_or_default()
+        self.turns
+            .get(i)
+            .or_else(|| self.turns.last())
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn seen_tools(&self) -> Vec<String> {
@@ -111,7 +117,9 @@ async fn filesystem_tools_write_read_roundtrip() {
         .expect("agent builds");
 
     let state = DeepAgentState {
-        messages: vec![Message::human("write hello world to out.txt then read it back")],
+        messages: vec![Message::human(
+            "write hello world to out.txt then read it back",
+        )],
     };
     let out = agent
         .invoke_async(state, &RunnableConfig::new())
@@ -128,7 +136,10 @@ async fn filesystem_tools_write_read_roundtrip() {
         .messages
         .iter()
         .any(|m| matches!(m.role, Role::Tool) && m.content_text().contains("hello world"));
-    assert!(has_read_result, "read_file tool result should be in messages");
+    assert!(
+        has_read_result,
+        "read_file tool result should be in messages"
+    );
 
     // 断言3：最终 AI 消息 "done"（loop 终止）。
     let last_ai = out
@@ -137,7 +148,10 @@ async fn filesystem_tools_write_read_roundtrip() {
         .iter()
         .rev()
         .find(|m| matches!(m.role, Role::Ai) && m.tool_calls.is_empty());
-    assert!(last_ai.is_some(), "should have a final tool-call-free AI message");
+    assert!(
+        last_ai.is_some(),
+        "should have a final tool-call-free AI message"
+    );
 }
 
 #[tokio::test]
@@ -163,9 +177,18 @@ async fn filesystem_capability_gates_execute() {
 
     // FilesystemBackend.supported_tools() = 7（无 execute）。
     let seen = model.seen_tools();
-    assert!(!seen.contains(&"execute".to_string()), "execute should be filtered: {seen:?}");
-    assert!(seen.contains(&"read_file".to_string()), "read_file should be visible: {seen:?}");
-    assert!(seen.contains(&"write_file".to_string()), "write_file should be visible: {seen:?}");
+    assert!(
+        !seen.contains(&"execute".to_string()),
+        "execute should be filtered: {seen:?}"
+    );
+    assert!(
+        seen.contains(&"read_file".to_string()),
+        "read_file should be visible: {seen:?}"
+    );
+    assert!(
+        seen.contains(&"write_file".to_string()),
+        "write_file should be visible: {seen:?}"
+    );
     assert_eq!(seen.len(), 7, "exactly 7 fs tools (no execute): {seen:?}");
 }
 
@@ -173,9 +196,7 @@ async fn filesystem_capability_gates_execute() {
 async fn local_shell_execute_tool_runs() {
     // LocalShellBackend 是 SandboxBackend → execute 工具可见 + 真实执行。
     use deepagents::LocalShellBackend;
-    let backend = Arc::new(LocalShellBackend::with_cwd(
-        std::env::temp_dir(),
-    )) as Arc<dyn Backend>;
+    let backend = Arc::new(LocalShellBackend::with_cwd(std::env::temp_dir())) as Arc<dyn Backend>;
 
     // turn1: execute(echo hello); turn2: done. echo 跨平台行为一致（cmd /C echo + sh -c echo）。
     let echo_cmd = "echo hello";
@@ -219,7 +240,8 @@ async fn permission_denies_write_to_secret_allows_public() {
     let tmp = tempfile::tempdir().expect("tmp");
     let backend = Arc::new(FilesystemBackend::new(tmp.path())) as Arc<dyn Backend>;
     let perms = vec![
-        FilesystemPermission::deny(vec![FilesystemOperation::Write], vec!["/secret/**".into()]).unwrap(),
+        FilesystemPermission::deny(vec![FilesystemOperation::Write], vec!["/secret/**".into()])
+            .unwrap(),
     ];
 
     // turn1: write /secret/x.txt (deny); turn2: write /public/x.txt (allow); turn3: done
@@ -267,10 +289,9 @@ async fn permission_denies_write_to_secret_allows_public() {
         "public file should be created (allow)"
     );
     // messages 含 permission denied 工具结果
-    let has_deny = out
-        .value
-        .messages
-        .iter()
-        .any(|m| matches!(m.role, Role::Tool) && m.content_text().contains("permission denied"));
+    let has_deny =
+        out.value.messages.iter().any(|m| {
+            matches!(m.role, Role::Tool) && m.content_text().contains("permission denied")
+        });
     assert!(has_deny, "should have permission denied tool result");
 }

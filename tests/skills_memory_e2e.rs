@@ -9,8 +9,10 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use deepagents::{DeepAgentBuilder, DeepAgentState, MemoryMiddleware, SkillsMiddleware};
-use juncture::llm::{CallOptions, ChatModel, LlmError, Message, MessageChunk, Role, ToolDefinition};
 use juncture::RunnableConfig;
+use juncture::llm::{
+    CallOptions, ChatModel, LlmError, Message, MessageChunk, Role, ToolDefinition,
+};
 
 /// 间谍模型：记录 bind_tools 收到的 tool 名 + invoke 收到的 system message。
 #[derive(Clone)]
@@ -108,7 +110,10 @@ async fn skills_and_memory_both_inject_into_system_message() {
     // AGENTS.md：放一条有辨识度的记忆内容。
     let agents_md_path = tmp.path().join("AGENTS.md");
     let memory_marker = "Project memory: never deploy on Fridays.";
-    write(&agents_md_path, &format!("# Project Notes\n\n{memory_marker}\n"));
+    write(
+        &agents_md_path,
+        &format!("# Project Notes\n\n{memory_marker}\n"),
+    );
 
     // SkillsMiddleware + MemoryMiddleware 同时挂载（顺序：Skills 先注入 ## Skills，
     // Memory 后注入 <agent_memory>，两段叠加进同一个 system_message）。

@@ -11,13 +11,13 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use deepagents::{DeepAgentBuilder, DeepAgentState};
+use juncture::RunnableConfig;
 use juncture::llm::{
     CallOptions, ChatModel, LlmError, Message, MessageChunk, MockChatModel, Role, ToolDefinition,
 };
 use juncture::state::messages::ToolCall;
 use juncture::tools::{Tool, ToolError};
-use juncture::RunnableConfig;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// 脚本模型：按序返回预设 turns（content + tool_calls），同时记录 bind_tools 收到的 tool 名。
 ///
@@ -40,7 +40,11 @@ impl ScriptedModel {
 
     fn next_turn(&self) -> (String, Vec<ToolCall>) {
         let i = self.index.fetch_add(1, Ordering::Relaxed);
-        self.turns.get(i).or_else(|| self.turns.last()).cloned().unwrap_or_default()
+        self.turns
+            .get(i)
+            .or_else(|| self.turns.last())
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn seen_tools(&self) -> Vec<String> {
@@ -111,10 +115,7 @@ impl Tool for EchoTool {
     }
 
     async fn invoke(&self, input: Value) -> Result<String, ToolError> {
-        let text = input
-            .get("text")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let text = input.get("text").and_then(|v| v.as_str()).unwrap_or("");
         Ok(text.to_string())
     }
 }

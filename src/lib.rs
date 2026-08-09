@@ -15,17 +15,18 @@
 //!
 //! `ModelRequest = { tools, system_message, options }`；`messages` 永远来自 `state.messages`（中间件改 state 即持久化）。
 
-pub mod state;
-pub mod middleware;
 pub mod backend;
+pub mod graph;
+pub mod middleware;
 pub mod permission;
 pub mod profiles;
-pub mod graph;
+pub mod state;
 
 pub use backend::{
-    Backend, CompositeBackend, FilesystemBackend, LocalShellBackend, ReadonlyBackend, SandboxBackend,
+    Backend, CompositeBackend, FilesystemBackend, LocalShellBackend, ReadonlyBackend,
+    SandboxBackend,
 };
-pub use graph::{create_deep_agent, DeepAgentBuilder, DeepAgentConfig};
+pub use graph::{DeepAgentBuilder, DeepAgentConfig, create_deep_agent};
 pub use middleware::async_subagent::AsyncSubAgentMiddleware;
 pub use middleware::filesystem::FilesystemMiddleware;
 pub use middleware::memory::MemoryMiddleware;
@@ -36,7 +37,7 @@ pub use middleware::subagent::{AgentRegistry, SubagentMiddleware};
 pub use middleware::summarization::SummarizationMiddleware;
 pub use middleware::{Middleware, MiddlewareChain, MiddlewareError, ModelRequest};
 pub use permission::{
-    check_fs_permission, FilesystemOperation, FilesystemPermission, PermissionMode,
+    FilesystemOperation, FilesystemPermission, PermissionMode, check_fs_permission,
 };
-pub use profiles::{apply_profile_prompt, HarnessProfile, ProfileRegistry};
+pub use profiles::{HarnessProfile, ProfileRegistry, apply_profile_prompt};
 pub use state::DeepAgentState;

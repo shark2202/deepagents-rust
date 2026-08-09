@@ -24,13 +24,19 @@ impl LocalShellBackend {
     /// 在当前工作目录执行。
     #[must_use]
     pub fn new() -> Self {
-        Self { cwd: None, id: "local-shell".to_string() }
+        Self {
+            cwd: None,
+            id: "local-shell".to_string(),
+        }
     }
 
     /// 指定工作目录。
     #[must_use]
     pub fn with_cwd(cwd: impl Into<PathBuf>) -> Self {
-        Self { cwd: Some(cwd.into()), id: "local-shell".to_string() }
+        Self {
+            cwd: Some(cwd.into()),
+            id: "local-shell".to_string(),
+        }
     }
 }
 
@@ -80,10 +86,19 @@ impl SandboxBackend for LocalShellBackend {
         };
         let fut = child.wait_with_output();
         let out = match timeout {
-            Some(secs) => match tokio::time::timeout(std::time::Duration::from_secs(u64::from(secs)), fut).await {
-                Ok(r) => r,
-                Err(_) => return ExecuteResponse::new(format!("Error: execute timed out after {secs}s"), None),
-            },
+            Some(secs) => {
+                match tokio::time::timeout(std::time::Duration::from_secs(u64::from(secs)), fut)
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(_) => {
+                        return ExecuteResponse::new(
+                            format!("Error: execute timed out after {secs}s"),
+                            None,
+                        );
+                    }
+                }
+            }
             None => fut.await,
         };
         match out {
