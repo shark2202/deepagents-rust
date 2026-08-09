@@ -18,6 +18,8 @@ pub mod patch_tool_calls;
 pub mod skills;
 pub mod subagent;
 pub mod summarization;
+pub mod prompt_caching;
+pub mod async_subagent;
 
 use std::fmt::Debug;
 use std::sync::Arc;

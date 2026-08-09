@@ -19,15 +19,18 @@ pub mod state;
 pub mod middleware;
 pub mod backend;
 pub mod permission;
+pub mod profiles;
 pub mod graph;
 
 pub use backend::{
     Backend, CompositeBackend, FilesystemBackend, LocalShellBackend, ReadonlyBackend, SandboxBackend,
 };
 pub use graph::{create_deep_agent, DeepAgentBuilder, DeepAgentConfig};
+pub use middleware::async_subagent::AsyncSubAgentMiddleware;
 pub use middleware::filesystem::FilesystemMiddleware;
 pub use middleware::memory::MemoryMiddleware;
 pub use middleware::patch_tool_calls::PatchToolCallsMiddleware;
+pub use middleware::prompt_caching::AnthropicPromptCachingMiddleware;
 pub use middleware::skills::{SkillMetadata, SkillsMiddleware};
 pub use middleware::subagent::{AgentRegistry, SubagentMiddleware};
 pub use middleware::summarization::SummarizationMiddleware;
@@ -35,4 +38,5 @@ pub use middleware::{Middleware, MiddlewareChain, MiddlewareError, ModelRequest}
 pub use permission::{
     check_fs_permission, FilesystemOperation, FilesystemPermission, PermissionMode,
 };
+pub use profiles::{apply_profile_prompt, HarnessProfile, ProfileRegistry};
 pub use state::DeepAgentState;
