@@ -6,12 +6,14 @@
 //! Phase 2a 增量 A：trait + 数据类 + `FilesystemBackend`(本地) + `LocalShellBackend`(subprocess)。
 //! `ReadonlyBackend` 保留以维持 MVP 测试。
 
+mod composite;
 mod filesystem;
 mod local_shell;
 mod protocol;
 mod readonly;
 mod types;
 
+pub use composite::CompositeBackend;
 pub use filesystem::FilesystemBackend;
 pub use local_shell::LocalShellBackend;
 pub use protocol::{Backend, SandboxBackend};

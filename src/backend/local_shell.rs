@@ -42,6 +42,11 @@ impl Default for LocalShellBackend {
 
 #[async_trait]
 impl Backend for LocalShellBackend {
+    fn supported_tools(&self) -> Vec<&'static str> {
+        // 文件操作继承 default not-implemented；仅 execute 可用。
+        vec!["execute"]
+    }
+
     fn as_sandbox(&self) -> Option<&dyn SandboxBackend> {
         Some(self)
     }

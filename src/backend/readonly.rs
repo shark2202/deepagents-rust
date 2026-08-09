@@ -14,8 +14,8 @@ pub struct ReadonlyBackend;
 
 #[async_trait]
 impl Backend for ReadonlyBackend {
-    fn supported_tools(&self) -> &'static [&'static str] {
-        &["read_file"]
+    fn supported_tools(&self) -> Vec<&'static str> {
+        vec!["read_file"]
     }
 
     async fn read(&self, _file_path: &str, _offset: usize, _limit: usize) -> ReadResult {

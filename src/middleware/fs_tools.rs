@@ -1,10 +1,13 @@
 //! 8 个文件系统工具 —— 对应 deepagents `FsToolName`（ls/read_file/write_file/edit_file/
 //! glob/grep/delete/execute）。
 //!
-//! 每个工具持 `Arc<dyn Backend>`，作为 juncture `Tool`。`FilesystemMiddleware::tools()` 返回
-//! 这 8 个；`wrap_model_call` 按 `backend.supported_tools()` per-call 过滤可见性（capability gating）。
+//! 每个工具持 `Arc<dyn Backend>` + `Arc<[FilesystemPermission]>`。invoke 顺序：
+//! parse args → `check_deny`（Deny → "Error: permission denied..."；Interrupt 视为 allow，交 HITL defer）
+//! → backend call → 格式化。
+//!
 //! 工具失败返回 `Ok("Error: ...")`（对齐 deepagents `ToolMessage(status="error")`，
 //! 也兼容 juncture `ToolErrorHandlingMiddleware` 的 "Error:" 前缀识别）。
+//! post-filter（ls/glob/grep drop deny entries）defer 到增量 C2。
 
 use std::sync::Arc;
 
@@ -13,6 +16,7 @@ use juncture::tools::{Tool, ToolError};
 use serde_json::{json, Value};
 
 use crate::backend::{Backend, FileInfo};
+use crate::permission::{check_deny, FilesystemOperation, FilesystemPermission};
 
 // ===== helper =====
 
@@ -56,17 +60,30 @@ fn err_str(e: impl std::fmt::Display) -> String {
     format!("Error: {e}")
 }
 
+/// permission deny 检查：Deny → Some("Error: ...")，否则 None。
+fn perm_deny_str(
+    perms: &[FilesystemPermission],
+    op: FilesystemOperation,
+    path: &str,
+) -> Option<String> {
+    match check_deny(perms, op, path) {
+        Err(e) => Some(format!("Error: {e}")),
+        Ok(()) => None,
+    }
+}
+
 // ===== ls =====
 
 /// 列目录。
 pub struct LsTool {
     backend: Arc<dyn Backend>,
+    permissions: Arc<[FilesystemPermission]>,
 }
 
 impl LsTool {
     #[must_use]
-    pub fn new(backend: Arc<dyn Backend>) -> Self {
-        Self { backend }
+    pub fn new(backend: Arc<dyn Backend>, permissions: Arc<[FilesystemPermission]>) -> Self {
+        Self { backend, permissions }
     }
 }
 
@@ -83,6 +100,9 @@ impl Tool for LsTool {
     }
     async fn invoke(&self, input: Value) -> Result<String, ToolError> {
         let path = get_str(&input, "path")?;
+        if let Some(e) = perm_deny_str(&self.permissions, FilesystemOperation::Read, &path) {
+            return Ok(e);
+        }
         let r = self.backend.ls(&path).await;
         match r.error {
             Some(e) => Ok(err_str(e)),
@@ -96,12 +116,13 @@ impl Tool for LsTool {
 /// 读文件内容（带行号 + 分页）。
 pub struct ReadFileTool {
     backend: Arc<dyn Backend>,
+    permissions: Arc<[FilesystemPermission]>,
 }
 
 impl ReadFileTool {
     #[must_use]
-    pub fn new(backend: Arc<dyn Backend>) -> Self {
-        Self { backend }
+    pub fn new(backend: Arc<dyn Backend>, permissions: Arc<[FilesystemPermission]>) -> Self {
+        Self { backend, permissions }
     }
 }
 
@@ -118,6 +139,9 @@ impl Tool for ReadFileTool {
     }
     async fn invoke(&self, input: Value) -> Result<String, ToolError> {
         let file_path = get_str(&input, "file_path")?;
+        if let Some(e) = perm_deny_str(&self.permissions, FilesystemOperation::Read, &file_path) {
+            return Ok(e);
+        }
         let offset = get_opt_u64(&input, "offset").unwrap_or(0) as usize;
         let limit = get_opt_u64(&input, "limit").unwrap_or(100) as usize;
         let r = self.backend.read(&file_path, offset, limit).await;
@@ -148,12 +172,13 @@ impl Tool for ReadFileTool {
 /// 写文件（创建或覆盖）。
 pub struct WriteFileTool {
     backend: Arc<dyn Backend>,
+    permissions: Arc<[FilesystemPermission]>,
 }
 
 impl WriteFileTool {
     #[must_use]
-    pub fn new(backend: Arc<dyn Backend>) -> Self {
-        Self { backend }
+    pub fn new(backend: Arc<dyn Backend>, permissions: Arc<[FilesystemPermission]>) -> Self {
+        Self { backend, permissions }
     }
 }
 
@@ -170,6 +195,9 @@ impl Tool for WriteFileTool {
     }
     async fn invoke(&self, input: Value) -> Result<String, ToolError> {
         let file_path = get_str(&input, "file_path")?;
+        if let Some(e) = perm_deny_str(&self.permissions, FilesystemOperation::Write, &file_path) {
+            return Ok(e);
+        }
         let content = get_str(&input, "content")?;
         let r = self.backend.write(&file_path, &content).await;
         match (r.error, r.path) {
@@ -185,12 +213,13 @@ impl Tool for WriteFileTool {
 /// 精确字符串替换。
 pub struct EditFileTool {
     backend: Arc<dyn Backend>,
+    permissions: Arc<[FilesystemPermission]>,
 }
 
 impl EditFileTool {
     #[must_use]
-    pub fn new(backend: Arc<dyn Backend>) -> Self {
-        Self { backend }
+    pub fn new(backend: Arc<dyn Backend>, permissions: Arc<[FilesystemPermission]>) -> Self {
+        Self { backend, permissions }
     }
 }
 
@@ -207,6 +236,9 @@ impl Tool for EditFileTool {
     }
     async fn invoke(&self, input: Value) -> Result<String, ToolError> {
         let file_path = get_str(&input, "file_path")?;
+        if let Some(e) = perm_deny_str(&self.permissions, FilesystemOperation::Write, &file_path) {
+            return Ok(e);
+        }
         let old_string = get_str(&input, "old_string")?;
         let new_string = get_str(&input, "new_string")?;
         let replace_all = get_opt_bool(&input, "replace_all").unwrap_or(false);
@@ -227,12 +259,13 @@ impl Tool for EditFileTool {
 /// glob 匹配文件。
 pub struct GlobTool {
     backend: Arc<dyn Backend>,
+    permissions: Arc<[FilesystemPermission]>,
 }
 
 impl GlobTool {
     #[must_use]
-    pub fn new(backend: Arc<dyn Backend>) -> Self {
-        Self { backend }
+    pub fn new(backend: Arc<dyn Backend>, permissions: Arc<[FilesystemPermission]>) -> Self {
+        Self { backend, permissions }
     }
 }
 
@@ -250,6 +283,11 @@ impl Tool for GlobTool {
     async fn invoke(&self, input: Value) -> Result<String, ToolError> {
         let pattern = get_str(&input, "pattern")?;
         let path = get_opt_str(&input, "path");
+        // permission check on base path（对齐 deepagents: validate_path(path or "/")）
+        let perm_path = path.as_deref().unwrap_or("/");
+        if let Some(e) = perm_deny_str(&self.permissions, FilesystemOperation::Read, perm_path) {
+            return Ok(e);
+        }
         let r = self.backend.glob(&pattern, path.as_deref()).await;
         if let Some(e) = r.error {
             return Ok(err_str(e));
@@ -268,12 +306,13 @@ impl Tool for GlobTool {
 /// 字面量文本搜索（非 regex）。
 pub struct GrepTool {
     backend: Arc<dyn Backend>,
+    permissions: Arc<[FilesystemPermission]>,
 }
 
 impl GrepTool {
     #[must_use]
-    pub fn new(backend: Arc<dyn Backend>) -> Self {
-        Self { backend }
+    pub fn new(backend: Arc<dyn Backend>, permissions: Arc<[FilesystemPermission]>) -> Self {
+        Self { backend, permissions }
     }
 }
 
@@ -294,6 +333,12 @@ impl Tool for GrepTool {
         let glob = get_opt_str(&input, "glob");
         let output_mode = get_opt_str(&input, "output_mode").unwrap_or_else(|| "files_with_matches".to_string());
         let max_count = get_opt_u64(&input, "max_count").map(|n| n as usize);
+        // permission check：仅当 path is Some（对齐 deepagents：path=None 时不 pre-check，走 post-filter）
+        if let Some(p) = &path
+            && let Some(e) = perm_deny_str(&self.permissions, FilesystemOperation::Read, p)
+        {
+            return Ok(e);
+        }
         let r = self
             .backend
             .grep(&pattern, path.as_deref(), glob.as_deref(), max_count)
@@ -304,7 +349,6 @@ impl Tool for GrepTool {
         let matches = r.matches.unwrap_or_default();
         let out = match output_mode.as_str() {
             "count" => {
-                // 按文件聚合 count
                 use std::collections::BTreeMap;
                 let mut counts: BTreeMap<String, usize> = BTreeMap::new();
                 for m in &matches {
@@ -318,7 +362,6 @@ impl Tool for GrepTool {
                 .collect::<Vec<_>>()
                 .join("\n"),
             _ => {
-                // files_with_matches：unique paths
                 let mut seen = Vec::new();
                 for m in &matches {
                     if !seen.contains(&m.path) {
@@ -345,12 +388,13 @@ impl Tool for GrepTool {
 /// 递归删除。
 pub struct DeleteTool {
     backend: Arc<dyn Backend>,
+    permissions: Arc<[FilesystemPermission]>,
 }
 
 impl DeleteTool {
     #[must_use]
-    pub fn new(backend: Arc<dyn Backend>) -> Self {
-        Self { backend }
+    pub fn new(backend: Arc<dyn Backend>, permissions: Arc<[FilesystemPermission]>) -> Self {
+        Self { backend, permissions }
     }
 }
 
@@ -367,6 +411,10 @@ impl Tool for DeleteTool {
     }
     async fn invoke(&self, input: Value) -> Result<String, ToolError> {
         let file_path = get_str(&input, "file_path")?;
+        // deepagents 用 conservative subtree check（_find_delete_deny_patterns）；MVP 简化为 check_deny on file_path。
+        if let Some(e) = perm_deny_str(&self.permissions, FilesystemOperation::Write, &file_path) {
+            return Ok(e);
+        }
         let r = self.backend.delete(&file_path).await;
         match (r.error, r.path) {
             (Some(e), _) => Ok(err_str(e)),
@@ -378,7 +426,7 @@ impl Tool for DeleteTool {
 
 // ===== execute =====
 
-/// 执行 shell 命令（需 SandboxBackend）。
+/// 执行 shell 命令（需 SandboxBackend）。execute 无 permission 检查（对齐 deepagents spec）。
 pub struct ExecuteTool {
     backend: Arc<dyn Backend>,
 }
@@ -427,17 +475,21 @@ impl Tool for ExecuteTool {
     }
 }
 
-/// 构造全部 8 个 fs 工具（持 backend clone）。构造顺序对齐 deepagents：ls, read_file, write_file, edit_file, delete, glob, grep, execute。
+/// 构造全部 8 个 fs 工具（持 backend + permissions clone）。
+/// 构造顺序对齐 deepagents：ls, read_file, write_file, edit_file, delete, glob, grep, execute。
 #[must_use]
-pub fn all_fs_tools(backend: Arc<dyn Backend>) -> Vec<Box<dyn Tool>> {
+pub fn all_fs_tools(
+    backend: Arc<dyn Backend>,
+    permissions: Arc<[FilesystemPermission]>,
+) -> Vec<Box<dyn Tool>> {
     vec![
-        Box::new(LsTool::new(Arc::clone(&backend))),
-        Box::new(ReadFileTool::new(Arc::clone(&backend))),
-        Box::new(WriteFileTool::new(Arc::clone(&backend))),
-        Box::new(EditFileTool::new(Arc::clone(&backend))),
-        Box::new(DeleteTool::new(Arc::clone(&backend))),
-        Box::new(GlobTool::new(Arc::clone(&backend))),
-        Box::new(GrepTool::new(Arc::clone(&backend))),
+        Box::new(LsTool::new(Arc::clone(&backend), Arc::clone(&permissions))),
+        Box::new(ReadFileTool::new(Arc::clone(&backend), Arc::clone(&permissions))),
+        Box::new(WriteFileTool::new(Arc::clone(&backend), Arc::clone(&permissions))),
+        Box::new(EditFileTool::new(Arc::clone(&backend), Arc::clone(&permissions))),
+        Box::new(DeleteTool::new(Arc::clone(&backend), Arc::clone(&permissions))),
+        Box::new(GlobTool::new(Arc::clone(&backend), Arc::clone(&permissions))),
+        Box::new(GrepTool::new(Arc::clone(&backend), Arc::clone(&permissions))),
         Box::new(ExecuteTool::new(backend)),
     ]
 }

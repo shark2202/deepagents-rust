@@ -13,8 +13,9 @@ use super::types::*;
 pub trait Backend: Send + Sync + Debug {
     /// 该 backend 暴露给 LLM 的工具名（用于 FilesystemMiddleware 的 per-call 过滤）。
     /// 默认全 8 个恒暴露；具体 backend 可 override 裁剪（如 ReadonlyBackend 只 `read_file`）。
-    fn supported_tools(&self) -> &'static [&'static str] {
-        &["ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep", "execute"]
+    /// 返回 `Vec` 而非 `&'static` 以支持 `CompositeBackend` 动态 union。
+    fn supported_tools(&self) -> Vec<&'static str> {
+        vec!["ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep", "execute"]
     }
 
     /// 列目录。

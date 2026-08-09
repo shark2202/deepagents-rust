@@ -18,10 +18,16 @@
 pub mod state;
 pub mod middleware;
 pub mod backend;
+pub mod permission;
 pub mod graph;
 
-pub use backend::{Backend, FilesystemBackend, LocalShellBackend, ReadonlyBackend, SandboxBackend};
+pub use backend::{
+    Backend, CompositeBackend, FilesystemBackend, LocalShellBackend, ReadonlyBackend, SandboxBackend,
+};
 pub use graph::{create_deep_agent, DeepAgentBuilder, DeepAgentConfig};
 pub use middleware::filesystem::FilesystemMiddleware;
 pub use middleware::{Middleware, MiddlewareChain, MiddlewareError, ModelRequest};
+pub use permission::{
+    check_fs_permission, FilesystemOperation, FilesystemPermission, PermissionMode,
+};
 pub use state::DeepAgentState;

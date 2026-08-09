@@ -5,7 +5,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use deepagents::{Backend, DeepAgentBuilder, DeepAgentState, FilesystemBackend, FilesystemMiddleware};
+use deepagents::{
+    Backend, DeepAgentBuilder, DeepAgentState, FilesystemBackend, FilesystemMiddleware,
+    FilesystemOperation, FilesystemPermission,
+};
 use juncture::llm::{CallOptions, ChatModel, LlmError, Message, MessageChunk, Role, ToolDefinition};
 use juncture::state::messages::ToolCall;
 use juncture::RunnableConfig;
@@ -208,4 +211,66 @@ async fn local_shell_execute_tool_runs() {
         .iter()
         .any(|m| matches!(m.role, Role::Tool) && m.content_text().contains("hello"));
     assert!(has_echo, "execute output should contain 'hello'");
+}
+
+#[tokio::test]
+async fn permission_denies_write_to_secret_allows_public() {
+    // deny write to /secret/**; allow elsewhere (default Allow)。
+    let tmp = tempfile::tempdir().expect("tmp");
+    let backend = Arc::new(FilesystemBackend::new(tmp.path())) as Arc<dyn Backend>;
+    let perms = vec![
+        FilesystemPermission::deny(vec![FilesystemOperation::Write], vec!["/secret/**".into()]).unwrap(),
+    ];
+
+    // turn1: write /secret/x.txt (deny); turn2: write /public/x.txt (allow); turn3: done
+    let model = ScriptedModel::new(vec![
+        (
+            String::new(),
+            vec![ToolCall {
+                id: "c1".into(),
+                name: "write_file".into(),
+                arguments: json!({"file_path":"/secret/x.txt","content":"data"}),
+            }],
+        ),
+        (
+            String::new(),
+            vec![ToolCall {
+                id: "c2".into(),
+                name: "write_file".into(),
+                arguments: json!({"file_path":"/public/x.txt","content":"data"}),
+            }],
+        ),
+        ("done".into(), vec![]),
+    ]);
+
+    let agent = DeepAgentBuilder::new(model)
+        .middleware_one(FilesystemMiddleware::with_permissions(backend, perms))
+        .build()
+        .expect("agent builds");
+
+    let state = DeepAgentState {
+        messages: vec![Message::human("write to secret then public")],
+    };
+    let out = agent
+        .invoke_async(state, &RunnableConfig::new())
+        .await
+        .expect("agent runs");
+
+    // /secret/x.txt 未创建（deny 阻止 backend call）
+    assert!(
+        !tmp.path().join("secret/x.txt").exists(),
+        "secret file should NOT be created (deny)"
+    );
+    // /public/x.txt 创建（allow）
+    assert!(
+        tmp.path().join("public/x.txt").exists(),
+        "public file should be created (allow)"
+    );
+    // messages 含 permission denied 工具结果
+    let has_deny = out
+        .value
+        .messages
+        .iter()
+        .any(|m| matches!(m.role, Role::Tool) && m.content_text().contains("permission denied"));
+    assert!(has_deny, "should have permission denied tool result");
 }

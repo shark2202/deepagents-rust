@@ -46,9 +46,9 @@ impl FilesystemBackend {
 
 #[async_trait]
 impl Backend for FilesystemBackend {
-    fn supported_tools(&self) -> &'static [&'static str] {
+    fn supported_tools(&self) -> Vec<&'static str> {
         // execute 由 SandboxBackend 提供；FilesystemBackend 非 sandbox。
-        &["ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep"]
+        vec!["ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep"]
     }
 
     async fn ls(&self, path: &str) -> LsResult {
