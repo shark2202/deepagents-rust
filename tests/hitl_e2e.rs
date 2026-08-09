@@ -54,12 +54,12 @@ use deepagents::{
     Backend, DeepAgentBuilder, DeepAgentState, FilesystemBackend, FilesystemMiddleware,
     FilesystemOperation, FilesystemPermission, PermissionMode, check_fs_permission,
 };
-use juncture::RunnableConfig;
 use juncture::llm::{
     CallOptions, ChatModel, LlmError, Message, MessageChunk, Role, ToolDefinition,
 };
 use juncture::state::messages::ToolCall;
 use juncture::tools::Tool;
+use juncture::RunnableConfig;
 use serde_json::json;
 
 /// 脚本模型：按序返回预设 turns（content + tool_calls）。
@@ -240,21 +240,39 @@ async fn interrupt_permission_blocks_write_in_deep_agent_e2e() {
         messages: vec![Message::human("write data to /secret/x.txt")],
     };
     let cfg = RunnableConfig::new().with_thread_id("hitl-test");
-    let _out = agent.invoke_async(state, &cfg).await.expect("invoke runs");
+    // invoke：工具 interrupt 触发 → interrupt_with_ctx! 发 signal → after_tick drain 收到 →
+    // LoopStatus::InterruptAfter 设 + checkpoint 存 pending_interrupts。
+    // 但 juncture 上游断点 B（loop_.rs:939 tick 无 InterruptAfter 守卫）→ loop 不暂停，
+    // 继续跑 agent → turn2 "done" → invoke 返 Ok（非 Err/非 pause）。
+    let out = agent.invoke_async(state, &cfg).await.expect("invoke runs");
 
-    // 断言1：文件未创建——工具 propagate Err → ToolNode 失败不 merge writes → write 阻断。
-    //
-    // 注（诚实 gap）：完整 Pregel pause+resume 仍未通——即使 wire checkpointer (A) +
-    // 工具节点配 retry 走非 inline runner (C) + propagate Err (B)，interrupt signal 仍未
-    // drain 到 LoopStatus::InterruptAfter（invoke 返 Ok + interrupts 空）。根因在 juncture
-    // runtime 深层：runner 非 inline 路径的 INTERRUPT_CONTEXT.interrupt_tx channel 与
-    // Pregel loop after_tick drain 的关联需进一步调试，超出本次 src 修复范围。
-    // 当前 HITL = 工具层 interrupt 检测 + propagate 阻断 write（文件不创建），非 pause+resume。
-    // 完整 pause+resume（resume(approve) → 文件创建 / resume(reject) → "rejected"）defer。
+    // 断言1：工具结果含 "Interrupted" —— 证明 HITL signal 真发了（interrupt_with_ctx! 执行，
+    // __interrupt_impl 返 Err(interrupted)，工具 catch 成 synthetic "Error: ... Interrupted at index 0"）。
+    let hitl_triggered = out
+        .value
+        .messages
+        .iter()
+        .any(|m| matches!(m.role, Role::Tool) && m.content_text().contains("Interrupted"));
+    assert!(
+        hitl_triggered,
+        "应含 Interrupted signal（HITL 触发），messages: {:?}",
+        out.value
+            .messages
+            .iter()
+            .map(|m| (format!("{:?}", m.role), m.content_text()))
+            .collect::<Vec<_>>()
+    );
+    // 断言2：文件未创建——工具 catch Err 成 synthetic（backend.write 未触达）。
     assert!(
         !tmp.path().join("secret/x.txt").exists(),
-        "interrupt 应阻断 write，文件不应创建（工具 propagate Err 阻断）"
+        "HITL 触发时文件不应创建"
     );
+
+    // pause+resume DEFER —— juncture 上游 2 断点阻塞：
+    //   断点 A（compiled.rs:658）：GraphOutput.interrupts 硬编码 Vec::new()，不读 pending_interrupts
+    //   断点 B（loop_.rs:939）：tick 无 InterruptAfter 守卫，loop 不暂停
+    // deepagents-rust 侧已修 signal 链通（task-local scope + interrupt_with_ctx! + drain 收到），
+    // 但完整 pause+resume 需 juncture 上游修 A+B。
 }
 
 /// 对照组：同一 agent setup 但**无** interrupt 规则（默认 Allow）→ `write_file` 触达

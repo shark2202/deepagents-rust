@@ -5,6 +5,7 @@
 //! （其 `before_model` 只读、tools 预绑死、`CallOptions` 无 tools 字段，无法承载 deepagents
 //! 拦截语义），而是借 juncture 的 `StateGraph`/Pregel/`Command`/`Node`/`ToolNode` runtime。
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures::future::FutureExt;
@@ -12,9 +13,9 @@ use juncture::JunctureError;
 use juncture::checkpoint::CheckpointSaver;
 use juncture::edge::{END, PathMap, RouteResult, Router};
 use juncture::graph::{CompiledGraph, RetryPolicy, StateGraph, TopologyError};
-use juncture::llm::{CallOptions, ChatModel, Message, ToolDefinition as LlmToolDefinition};
+use juncture::llm::{CallOptions, ChatModel, Message, Role, ToolDefinition as LlmToolDefinition};
 use juncture::node::NodeFnUpdate;
-use juncture::tools::{Tool, ToolDefinition as ToolsToolDefinition, ToolNode};
+use juncture::tools::{Tool, ToolDefinition as ToolsToolDefinition};
 use juncture::wasm_send::force_send;
 
 use crate::middleware::{
@@ -292,28 +293,57 @@ pub fn create_deep_agent<M: ChatModel>(
         .boxed()
     });
 
-    // tools 节点：复用 juncture ToolNode（持全量工具：caller + middleware 提供）
-    let tool_node = Arc::new(ToolNode::new(all_tools));
+    // tools 节点：**inline 工具调度**（不委托 juncture ToolNode）。
+    // 原因：ToolNode::execute_with_state 用 JoinSet::spawn 并发执行工具（node.rs:580），
+    // tokio task-local 不跨 spawn 边界 → INTERRUPT_CONTEXT task-local 丢失 → 工具
+    // check_interruptible 的 try_with 失败 → interrupt_with_ctx! 从不调用 → HITL signal
+    // 从不发出。inline 调度让工具跑在 runner 外层 task 内（INTERRUPT_CONTEXT.scope 生效），
+    // HITL interrupt 能取 ctx 发 signal → Pregel after_tick drain → InterruptAfter pause。
+    let tool_map: HashMap<String, Arc<dyn Tool>> = all_tools
+        .into_iter()
+        .map(|t| {
+            let arc: Arc<dyn Tool> = Arc::from(t);
+            (arc.name().to_string(), arc)
+        })
+        .fold(HashMap::new(), |mut m, (n, a)| {
+            m.insert(n, a);
+            m
+        });
+    let tool_map = Arc::new(tool_map);
     let tools_node = NodeFnUpdate(move |state: &DeepAgentState| {
-        let tool_node = Arc::clone(&tool_node);
+        let tool_map = Arc::clone(&tool_map);
         let messages = state.messages.clone();
-        let state_owned = state.clone();
         async move {
-            let results = tool_node
-                .execute_with_state(&messages, Some(&state_owned))
-                .await
-                .map_err(|e| {
-                    let msg = e.to_string();
-                    // HITL interrupt propagate：工具 check_interruptible 返 Err(ToolError) 含
-                    // "HITL interrupt"。转 JunctureError::interrupted（非 execution）——
-                    // RetryPolicy 不 retry interrupt → 不消耗 signal；interrupt_with_ctx! 已发
-                    // signal 到 channel，Pregel after_tick drain 检测 → InterruptAfter pause。
-                    if msg.contains("HITL interrupt") {
-                        JunctureError::interrupted(0)
-                    } else {
-                        JunctureError::execution(msg)
+            let last_ai = messages
+                .iter()
+                .rev()
+                .find(|m| matches!(m.role, Role::Ai) && !m.tool_calls.is_empty());
+            let mut results: Vec<Message> = Vec::new();
+            if let Some(ai) = last_ai {
+                for tc in &ai.tool_calls {
+                    let tool = match tool_map.get(&tc.name) {
+                        Some(t) => Arc::clone(t),
+                        None => {
+                            results.push(Message::tool_result(
+                                &tc.id,
+                                format!("Error: tool '{}' not found", tc.name),
+                            ));
+                            continue;
+                        }
+                    };
+                    match tool.invoke(tc.arguments.clone()).await {
+                        Ok(content) => results.push(Message::tool_result(&tc.id, content)),
+                        Err(e) => {
+                            // 工具 Err（含 HITL interrupt）→ synthetic Ok message（不 propagate）。
+                            // HITL signal 已由 interrupt_with_ctx! 内部发到 ctx.interrupt_tx
+                            // （独立于工具返回值）；after_tick drain 检测 signal → InterruptAfter
+                            // + save checkpoint → resume 重跑 node。若 propagate Err 会让 runner
+                            // 跳过 after_tick（drain + save 不跑），checkpoint 不保存 → resume 失败。
+                            results.push(Message::tool_result(&tc.id, format!("Error: {e}")));
+                        }
                     }
-                })?;
+                }
+            }
             Ok(DeepAgentStateUpdate {
                 messages: Some(results),
             })
@@ -323,12 +353,21 @@ pub fn create_deep_agent<M: ChatModel>(
 
     // 组装图
     let mut graph = StateGraph::<DeepAgentState>::new();
-    // agent 节点走默认（单 task inline fast-path 足够；无 interrupt 需求）。
-    graph.add_node_simple("agent", agent_node)?;
-    // tools 节点配 retry —— 让 runner 走非 inline 路径（`INTERRUPT_CONTEXT.scope`），
-    // 使工具内 `interrupt_with_ctx!` 能取到 task-local 上下文、发出 interrupt signal。
-    // RetryPolicy 默认不 retry interrupt 错误，走非 inline 即达 scope 目的。
-    graph.add_node_with_retry("tools", tools_node, RetryPolicy::default())?;
+    // agent 节点走默认（无 retry_policies metadata → 单 task inline fast-path 足够；无 interrupt 需求）。
+    graph.add_node("agent", agent_node, false, None, None, vec![], vec![])?;
+    // tools 节点配 NodeMetadata.retry_policies —— 让 runner build_retry_policy_map 含 "tools"
+    // → try_execute_single_task_inline(has_retry) return None → 走非 inline 路径
+    // （INTERRUPT_CONTEXT.scope 设），工具 interrupt_with_ctx! 能取 ctx 发 signal。
+    // 注：add_node_with_retry 包 RetryingNode 不写 metadata，runner 仍走 inline（不 scope）——故不用。
+    graph.add_node(
+        "tools",
+        tools_node,
+        false,
+        None,
+        None,
+        vec![RetryPolicy::default()],
+        vec![],
+    )?;
     graph.set_entry_point("agent");
 
     let path_map = PathMap::from(&[("tools", "tools"), (END, END)][..]);
