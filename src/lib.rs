@@ -26,6 +26,11 @@ pub use backend::{
 };
 pub use graph::{create_deep_agent, DeepAgentBuilder, DeepAgentConfig};
 pub use middleware::filesystem::FilesystemMiddleware;
+pub use middleware::memory::MemoryMiddleware;
+pub use middleware::patch_tool_calls::PatchToolCallsMiddleware;
+pub use middleware::skills::{SkillMetadata, SkillsMiddleware};
+pub use middleware::subagent::{AgentRegistry, SubagentMiddleware};
+pub use middleware::summarization::SummarizationMiddleware;
 pub use middleware::{Middleware, MiddlewareChain, MiddlewareError, ModelRequest};
 pub use permission::{
     check_fs_permission, FilesystemOperation, FilesystemPermission, PermissionMode,

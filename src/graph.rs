@@ -217,9 +217,15 @@ pub fn create_deep_agent<M: ChatModel>(
                 .await
                 .map_err(mw_err)?;
 
-            // 7. 追加 response 到 messages
+            // 7. 反映中间件对 state.messages 的改动（SummarizationMiddleware 折叠 / PatchToolCallsMiddleware
+            //    追加 synthetic tool results / before_agent 等）：
+            //    用 `Message::remove_all()` 哨兵清空旧 messages + 追加 state.messages（含中间件改动）
+            //    + response。`messages_reducer` 命中 `REMOVE_ALL_MESSAGES` 先 clear，再 append 新全集 → 替换语义。
+            let mut new_messages = vec![Message::remove_all()];
+            new_messages.extend(state.messages.iter().cloned());
+            new_messages.push(response);
             Ok(DeepAgentStateUpdate {
-                messages: Some(vec![response]),
+                messages: Some(new_messages),
             })
         }
         .boxed()
