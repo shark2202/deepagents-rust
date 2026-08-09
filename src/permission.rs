@@ -11,7 +11,7 @@ use globset::Glob;
 use std::fmt;
 
 /// 文件操作分类。`execute` 不在此（无 permission 分类）。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FilesystemOperation {
     Read,
     Write,

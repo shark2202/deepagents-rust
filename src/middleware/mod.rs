@@ -21,6 +21,15 @@ pub mod summarization;
 pub mod prompt_caching;
 pub mod async_subagent;
 
+// 子模块 pub 类型 re-export，便于 `crate::middleware::X` 路径访问。
+pub use async_subagent::AsyncSubAgentMiddleware;
+pub use memory::MemoryMiddleware;
+pub use patch_tool_calls::PatchToolCallsMiddleware;
+pub use prompt_caching::AnthropicPromptCachingMiddleware;
+pub use skills::{SkillMetadata, SkillsMiddleware};
+pub use subagent::{AgentRegistry, SubagentMiddleware};
+pub use summarization::SummarizationMiddleware;
+
 use std::fmt::Debug;
 use std::sync::Arc;
 
