@@ -918,8 +918,16 @@ pub fn emit_startup_failure(e: &Error) { ... }
 
 ## 十六、待验证项
 
-### Q10-POC：rig AgentRun serde 兼容性验证
+### Q10-POC：rig AgentRun serde 兼容性验证 ✅ 已通过
 
 - **目标**：验证 rig `AgentRun` serde 序列化能否支撑 LangGraph state format 兼容
-- **状态**：pending，不阻塞设计工作，可在实现前并行验证
+- **状态**：✅ 已验证通过（2026-09-01），POC 代码在 `poc-agentrun-serde/`
 - **验证内容**：`AgentRun` impl `Serialize + Deserialize`，序列化挂起的 run → 反序列化重建 → `tool_results()` 喂回 → `next_step()` 续跑
+- **验证结果**：
+  - ✅ `AgentRun` 实现了 `Serialize + Deserialize`（rig 0.42.0，docs.rs 确认）
+  - ✅ sans-IO 状态机可序列化/反序列化（609 bytes JSON round-trip）
+  - ✅ 反序列化后 `turn()` / `is_done()` / `messages()` / `full_history()` 状态完全一致
+  - ✅ `pending_invalid_tool_call()` 在反序列化后可恢复挂起上下文
+  - ✅ `usage()` / `completion_calls()` 在反序列化后可用
+  - ✅ 反序列化后 `next_step` / `model_response` / `tool_results` 协议可继续驱动
+- **结论**：rig `AgentRun` serde 能力完全支撑 sessions/resume（Q17）设计，无需自建 checkpoint 序列化层
