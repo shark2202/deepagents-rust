@@ -152,6 +152,8 @@ impl AgentHook for FilesystemMiddleware {
 | `CompiledSubAgent`（预编译 runnable） | `Box<dyn AgentRunner>` trait object | ✅ |
 | `AsyncSubAgent`（远程 background） | `AsyncSubAgentSpec` struct | ❌ 推迟 |
 
+> **迁移验证**：⚠️ 有缺口，详见 `docs/MIGRATION-VERIFICATION.md` §3.2（声明式 SubAgent 无损；Command 回写 / ToolRuntime / interrupt_on 继承 / GP 注入需自补，~1000 行；AsyncSubAgent 需重写 Agent Protocol 客户端，~1500 行） |
+
 **SubAgentSpec 字段**：
 
 ```rust
@@ -559,6 +561,7 @@ deepagents update    # 自更新
 - **信任列表**：`extension_trust.json`，手动 trust/untrust
 - **crate 选型**：`rust-embed` + `gix` + `serde_json`
 - **第三方沙箱 provider**：同样通过 JSON-RPC over stdio adapter
+- **迁移验证**：⚠️ 有缺口，详见 `docs/MIGRATION-VERIFICATION.md` §3.4（声明式 JSON plugins 无损；Python 原生 extensions 依赖 importlib/exec_module 不可迁移，需 PyO3 但破坏纯 Rust 约束）
 
 ### Q17 — Sessions/resume：rusqlite + bundled
 
@@ -595,6 +598,7 @@ deepagents update    # 自更新
 - **OAuth 3 种 flow**：loopback redirect / device code / paste-back
 - **环境变量扩展**：`${VAR}` / `${VAR:-default}`
 - **Token cache**：`mcp-tokens/` 目录
+- **迁移验证**：⚠️ 有缺口，详见 `docs/MIGRATION-VERIFICATION.md` §3.1（遗留 SSE transport rmcp 不支持 / GitHub device flow 需自补 / langchain_mcp_adapters 中间层需重写，~500 行）
 
 ### Q20 — Skills：8-source discovery
 
@@ -609,9 +613,10 @@ deepagents update    # 自更新
 8. Marketplaces 安装的 skills
 
 - **SKILL.md frontmatter**：YAML frontmatter（name, description, triggers, triggers_as_regex, containment）
-- **containment allowlist**：skill 只能调用 allowlist 内的工具
+- **containment allowlist**：原版 `allowed_tools` **仅在 system prompt 里打印提示，不做工具限制强制**（原版 `skills.py:879-880` 只展示不过滤）。Rust 版保持原版行为：提示不强制
 - **skill_trust.json**：手动 trust/untrust
 - **crate 选型**：`rust-embed` + `serde_yaml`
+- **迁移验证**：⚠️ 有缺口，详见 `docs/MIGRATION-VERIFICATION.md` §3.3（middleware 生命周期 / symlink 语义 / trust 模态需重写，~800 行）
 
 ### Q21 — Sandbox：trait-based provider
 
@@ -931,3 +936,26 @@ pub fn emit_startup_failure(e: &Error) { ... }
   - ✅ `usage()` / `completion_calls()` 在反序列化后可用
   - ✅ 反序列化后 `next_step` / `model_response` / `tool_results` 协议可继续驱动
 - **结论**：rig `AgentRun` serde 能力完全支撑 sessions/resume（Q17）设计，无需自建 checkpoint 序列化层
+
+### 子系统无损迁移验证 ✅ 已完成
+
+- **目标**：逐项验证原版 Python SDK 7 个核心子系统迁移到 Rust 的无损性
+- **状态**：✅ 已完成（2026-09-01），详细报告在 `docs/MIGRATION-VERIFICATION.md`
+- **验证方法**：7 个 sub-agent 并行勘测原版 Python 源码，逐行比对 API/语义/依赖
+- **验证结果汇总**：
+
+  | # | 子系统 | Q | 迁移性 | 桥接代码 | 详见 |
+  |---|---|---|---|---|---|
+  | 1 | hooks (hooks.json) | Q15 | ✅ 完全无损 | 0 | §3.0 |
+  | 2 | AGENTS.md memory | — | ✅ 完全无损 | 0 | §3.0 |
+  | 3 | MCP client | Q19 | ⚠️ 有缺口 | ~500 行 | §3.1 |
+  | 4 | subagent | Q6 | ⚠️ 有缺口 | ~1000 行 | §3.2 |
+  | 5 | skill | Q20 | ⚠️ 有缺口 | ~800 行 | §3.3 |
+  | 6 | plugin/extension | Q16 | ⚠️ 有缺口 | 不可迁移部分 | §3.4 |
+  | 7 | remote-agent (AsyncSubAgent) | — | ⚠️ 有大缺口 | ~1500 行 | §3.5 |
+
+- **完全无损（2/7）**：hooks（纯 JSON + subprocess，平台无关）、AGENTS.md memory（纯文本拼接）
+- **有缺口需自补（4/7）**：MCP / subagent / skill / plugin，合计 ~2300 行桥接代码
+- **有大缺口需重写（1/7）**：remote-agent，AsyncSubAgent 需重写 Agent Protocol 客户端，~1500 行
+- **不可迁移子集**：Python 原生 extensions（依赖 `importlib`/`exec_module`/`sys.modules`），需 PyO3 但破坏纯 Rust 约束
+- **结论**：SPEC 中各子系统段落的交叉引用已补齐（§3.0-§3.5），"无损迁移"过度声称已修正。~3800 行桥接代码为预期工作量，不阻塞实现阶段启动
