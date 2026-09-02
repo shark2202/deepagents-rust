@@ -242,3 +242,71 @@
 | skill（3 关键缺口） | ~800 行 |
 | remote-agent（Agent Protocol 客户端 + state reducer） | ~1500 行 |
 | **合计** | **~3800 行** |
+
+---
+
+## 八、桥接代码存在根因分析
+
+> 本节回答：为什么需要桥接？——核心原因是 rig 和 LangGraph 是不同的抽象，原版 SDK 假设的 LangGraph 特有概念在 rig 中没有直接对应物。
+
+### 8.1 三种不匹配
+
+| 不匹配类型 | 具体例子 | 影响子系统 |
+|---|---|---|
+| **运行时模型** | LangGraph 图+状态通道 vs rig 线性步进状态机 | subagent Command 回写、before_agent 生命周期 |
+| **类型系统** | Python 动态 TypedDict vs Rust serde struct | 声明式 spec 类型翻译、MCP 类型转换 |
+| **生态依赖** | langchain_mcp_adapters / importlib / Agent Protocol | MCP 适配层、Python extensions 不可迁移、远程协议客户端 |
+
+### 8.2 逐子系统根因
+
+#### MCP (~500 行) — 类型转换 + 协议补全
+
+```
+原版:  MCP server ── langchain_mcp_adapters ──→ LangChain Tool/Message
+Rust:  MCP server ── ??? ──→ rig Tool/Message
+```
+
+`langchain_mcp_adapters` 是一个 Python 包，做 MCP ↔ LangChain 类型的双向转换。Rust 侧 `rmcp` 说 MCP 协议，但它的 tool/message 类型 ≠ rig 的 `Tool`/`Message`。需要一个适配层做类型翻译。另外 rmcp 不支持 SSE transport，需要自己补。
+
+#### Subagent (~1000 行) — Command 通道 + 运行时上下文
+
+最大的语义鸿沟。原版子 agent 的核心机制是 **Command 通道回写**：
+
+```
+原版:  父 agent 调用 task tool → 子 agent 执行 → 子 agent 通过 Command 通道回写状态到父
+       （LangGraph 的 state channel 机制）
+rig:   没有 Command 通道概念
+```
+
+LangGraph 有"状态通道"（state channels），子图可以把状态写回父图。rig 的 `AgentRun` 是个线性步进状态机，没有父子状态回灌的概念。需要用 rig 的 `AgentHook` + `Scratchpad` 自己搭一套等价语义。还有 `ToolRuntime`（运行时上下文传递）、`interrupt_on` 继承逻辑、GP 子 agent 自动注入，都是原版建在 LangGraph 之上的概念。
+
+#### Skill (~800 行) — 中间件生命周期 + 发现语义
+
+```
+原版:  SkillsMiddleware(before_agent) → 发现 → 加载 → 注入 system prompt → 过滤工具
+rig:   没有对应的"发现-加载-注入"生命周期
+```
+
+原版 skill 依赖 LangGraph 的 `before_agent` 钩子做一次性初始化。rig 没有这个钩子（SPEC Q5 已说明 `before_agent` 被 builder 初始化吸收）。但 skill 的发现逻辑（8 个源、symlink 语义、trust 模态管理）需要在 rig 的 builder + hook 框架里重新实现这个生命周期。
+
+#### Plugin (不可迁移部分) — Python 运行时依赖
+
+```
+原版:  Python extension = importlib.exec_module(module_name) → sys.modules 注册 → 直接调用
+Rust:  无 importlib / 无 sys.modules / 无动态 Python 代码执行
+```
+
+这不是"桥接"能解决的，是**根本性不可迁移**。除非引入 PyO3（嵌入 CPython），但那破坏纯 Rust + 零 C 依赖的硬约束。声明式 JSON 插件（JSON-RPC over stdio）可以迁移，但 Python 原生扩展不行。
+
+#### Remote-agent (~1500 行) — 自定义协议客户端
+
+```
+原版:  AsyncSubAgent ←→ Agent Protocol (HTTP) ←→ 远程 agent 进程
+Rust:  没有 Agent Protocol 客户端
+```
+
+Agent Protocol 是原版自己设计的 HTTP 协议（invoke / events SSE / approve / interrupt），用于跟远程 agent 进程通信。这套协议的客户端在 Python 侧完整实现了，但 Rust 侧要从零写一个 HTTP+SSE 客户端 + 协议状态机。
+
+### 8.3 Q10-POC 验证的底层能力
+
+Q10-POC 验证的是最底层的那块——**AgentRun 的 serde 能力可以替代 LangGraph 的 checkpoint 持久化**。但建在 checkpoint 之上的高层概念（通道、命令、生命周期、协议）没有直接对应物，需要自己搭。~3800 行就是搭这些东西的工时。
