@@ -21,9 +21,15 @@ serde_json = { workspace = true }
 schemars = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-globset = { workspace = true }
-walkdir = { workspace = true }
-regex = { workspace = true }
+globset = { workspace = true, optional = true }
+walkdir = { workspace = true, optional = true }
+regex = { workspace = true, optional = true }
 deepagents-errors = { workspace = true }
+
+[features]
+default = ["filesystem", "composite"]
+minimal = []
+filesystem = ["dep:walkdir", "dep:regex", "dep:globset"]
+composite = []
 
 # Q-ref: Q1-Q8
