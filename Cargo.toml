@@ -1,31 +1,111 @@
-[package]
-name = "deepagents"
+# deepagents-rust workspace
+# 19 crates: 1 top-level library + 18 sub-crates
+# See docs/SPEC.md §七 for the full architecture.
+
+[workspace]
+resolver = "3"
+members = [
+    "crates/deepagents",
+    "crates/deepagents-core",
+    "crates/deepagents-config",
+    "crates/deepagents-env",
+    "crates/deepagents-cli",
+    "crates/deepagents-tui",
+    "crates/deepagents-hooks",
+    "crates/deepagents-plugins",
+    "crates/deepagents-sessions",
+    "crates/deepagents-approval",
+    "crates/deepagents-mcp",
+    "crates/deepagents-skills",
+    "crates/deepagents-sandbox",
+    "crates/deepagents-cost",
+    "crates/deepagents-goal",
+    "crates/deepagents-onboarding",
+    "crates/deepagents-update",
+    "crates/deepagents-doctor",
+    "crates/deepagents-errors",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "Apache-2.0"
-description = "Rust port of the LangChain Deep Agents SDK harness, built on juncture (LangGraph runtime)"
+authors = ["LangChain DeelAgents Rust Contributors"]
+repository = "https://github.com/langchain-ai/deepagents-rust"
+description = "Rust port of the LangChain Deep Agents SDK, built on rig"
 
-[dependencies]
-# juncture 提供 LangGraph runtime（StateGraph/Pregel/Command/interrupt/Store/Checkpointer/ChatModel/Tool）。
-# B 路径：deepagents-rust 自建中间件拦截层，不依赖 juncture 的 create_agent_with_middleware。
-juncture = { path = "../juncture/crates/juncture", features = ["openai", "anthropic"] }
-juncture-core = { path = "../juncture/crates/juncture-core" }
-juncture-checkpoint = { path = "../juncture/crates/juncture-checkpoint" }
-juncture-derive = { path = "../juncture/crates/juncture-derive" }
+[workspace.dependencies]
+# ── rig (runtime base) ──
+rig-core = "0.42"
+rig-agent = "0.42"
 
+# ── async / serialization ──
+tokio = { version = "1", features = ["rt", "macros", "process", "fs", "sync", "time"] }
 async-trait = "0.1"
 futures = "0.3"
-globset = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-thiserror = "2"
-tokio = { version = "1", features = ["rt", "macros", "process", "fs"] }
-tracing = "0.1"
-walkdir = "2"
+schemars = "1"
 
-[dev-dependencies]
-# test-util feature 提供 MockChatModel（MVP 端到端驱动的确定性测试模型）。
-juncture = { path = "../juncture/crates/juncture", features = ["test-util", "openai", "anthropic"] }
+# ── error / logging ──
+thiserror = "2"
+tracing = "0.1"
+
+# ── config / env ──
+toml = "0.8"
+toml_edit = "0.22"
+dotenvy = "0.15"
+
+# ── CLI / TUI ──
+clap = { version = "4", features = ["derive"] }
+ratatui = "0.29"
+crossterm = "0.28"
+
+# ── git / embed / yaml ──
+gix = "0.87"
+rust-embed = "8"
+serde_yaml = "0.9"
+
+# ── HTTP / TLS ──
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+axum = "0.8"
+hyper = "1"
+
+# ── DB / search ──
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# ── misc ──
+globset = "0.4"
+walkdir = "2"
+regex = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+semver = "1"
+sha2 = "0.10"
 tempfile = "3"
-tokio = { version = "1", features = ["rt", "macros", "rt-multi-thread"] }
+similar = "2"
+
+# ── internal crate deps (version = workspace) ──
+deepagents-core = { path = "crates/deepagents-core" }
+deepagents-config = { path = "crates/deepagents-config" }
+deepagents-env = { path = "crates/deepagents-env" }
+deepagents-cli = { path = "crates/deepagents-cli" }
+deepagents-tui = { path = "crates/deepagents-tui" }
+deepagents-hooks = { path = "crates/deepagents-hooks" }
+deepagents-plugins = { path = "crates/deepagents-plugins" }
+deepagents-sessions = { path = "crates/deepagents-sessions" }
+deepagents-approval = { path = "crates/deepagents-approval" }
+deepagents-mcp = { path = "crates/deepagents-mcp" }
+deepagents-skills = { path = "crates/deepagents-skills" }
+deepagents-sandbox = { path = "crates/deepagents-sandbox" }
+deepagents-cost = { path = "crates/deepagents-cost" }
+deepagents-goal = { path = "crates/deepagents-goal" }
+deepagents-onboarding = { path = "crates/deepagents-onboarding" }
+deepagents-update = { path = "crates/deepagents-update" }
+deepagents-doctor = { path = "crates/deepagents-doctor" }
+deepagents-errors = { path = "crates/deepagents-errors" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"

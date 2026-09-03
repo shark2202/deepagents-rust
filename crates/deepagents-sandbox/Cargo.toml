@@ -1,0 +1,23 @@
+[package]
+name = "deepagents-sandbox"
+description = "trait provider, 6 providers, reqwest+rustls (Q21)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+deepagents-errors = { workspace = true }
+
+# Q-ref: Q21

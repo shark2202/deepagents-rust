@@ -1,0 +1,24 @@
+[package]
+name = "deepagents-cli"
+description = "clap, 13 subcommands (Q13)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+clap = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+deepagents-core = { workspace = true }
+deepagents-config = { workspace = true }
+deepagents-errors = { workspace = true }
+
+# Q-ref: Q13

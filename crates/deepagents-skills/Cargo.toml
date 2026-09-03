@@ -1,0 +1,24 @@
+[package]
+name = "deepagents-skills"
+description = "8-source discovery, SKILL.md, rust-embed (Q20)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+rust-embed = { workspace = true }
+walkdir = { workspace = true }
+regex = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+deepagents-errors = { workspace = true }
+
+# Q-ref: Q20

@@ -1,0 +1,29 @@
+[package]
+name = "deepagents-core"
+description = "SDK layer: rig AgentRun + serde state, DeepAgentBuilder, middleware, backends, permissions (Q1-Q8)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+rig-core = { workspace = true }
+rig-agent = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+globset = { workspace = true }
+walkdir = { workspace = true }
+regex = { workspace = true }
+deepagents-errors = { workspace = true }
+
+# Q-ref: Q1-Q8

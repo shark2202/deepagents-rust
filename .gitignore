@@ -1,3 +1,10 @@
 /target
 **/target
 Cargo.lock
+
+# unrelated / non-project files
+.opcteam/
+AGENTS.md
+OKF-SPEC.md
+a.md
+golang_1/

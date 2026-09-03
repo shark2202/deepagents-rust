@@ -1,0 +1,23 @@
+[package]
+name = "deepagents-config"
+description = "config.toml 6-layer ranked resolver, 105 options (Q11)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+toml_edit = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+deepagents-errors = { workspace = true }
+
+# Q-ref: Q11

@@ -1,0 +1,24 @@
+[package]
+name = "deepagents-tui"
+description = "ratatui, Screen/Modal, 47 modals, theme (Q14,Q24)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+deepagents-errors = { workspace = true }
+
+# Q-ref: Q14,Q24
