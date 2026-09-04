@@ -7,10 +7,17 @@
 #![forbid(unsafe_code)]
 
 use deepagents_cli::{CliRunner, Commands};
+use deepagents_env::EnvRegistry;
 use deepagents_runtime::{ProviderModel, RunError};
 
 fn main() {
     let runner = CliRunner::parse();
+
+    // Load `.env` from the current working directory if it exists.
+    // Existing process environment variables are NOT overridden by `.env`
+    // values — explicit `KEY=VAL` in the shell always wins. A missing `.env`
+    // is silently OK.
+    let _ = EnvRegistry::new().load_dotenv_default();
 
     // Use a single-threaded runtime — the agent loop has no parallelism needs.
     let rt = tokio::runtime::Builder::new_current_thread()

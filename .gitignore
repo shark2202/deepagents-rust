@@ -8,3 +8,5 @@ AGENTS.md
 OKF-SPEC.md
 a.md
 golang_1/
+.env
+.env.*

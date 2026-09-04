@@ -21,6 +21,7 @@ deepagents-core = { workspace = true }
 deepagents-config = { workspace = true }
 deepagents-errors = { workspace = true }
 deepagents-runtime = { workspace = true }
+deepagents-env = { workspace = true }
 
 [[bin]]
 name = "deepagents"
