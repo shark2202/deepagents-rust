@@ -166,7 +166,15 @@ impl PermissionChecker {
 
     /// Check if any rule has `Interrupt` mode for the given operation.
     ///
-    /// Used to determine whether a HITL hook should be registered.
+    /// In v0, this method is provided as a public API but is not called
+    /// internally — HITL hook registration is driven by `interrupt_on` being
+    /// `Some(...)`, not by querying permission rules. The builder's
+    /// `interrupt_on` map is populated from `with_interrupt_on()` and also
+    /// auto-derived from permission rules via [`to_interrupt_map`](Self::to_interrupt_map).
+    ///
+    /// In v1, the runner will call this to decide whether to register
+    /// a checkpoint/pause hook for agents that have interrupt rules but
+    /// no explicit `interrupt_on` map.
     pub fn has_interrupt_rules(&self) -> bool {
         self.rules
             .iter()

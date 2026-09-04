@@ -281,7 +281,12 @@ impl Backend for StateBackend {
 
         for (stored_path, content) in files.iter() {
             if let Some(base) = path {
-                if !stored_path.starts_with(base) {
+                // Path-separator-aware prefix match: "/src" should match
+                // "/src" and "/src/file" but NOT "/src2/file".
+                let base = base.trim_end_matches('/');
+                if !(stored_path == base
+                    || stored_path.starts_with(&format!("{base}/")))
+                {
                     continue;
                 }
             }
@@ -321,7 +326,11 @@ impl Backend for StateBackend {
             .keys()
             .filter(|p| {
                 if let Some(base) = path {
-                    p.starts_with(base) && matcher.is_match(p)
+                    // Path-separator-aware prefix match: "/src" should match
+                    // "/src" and "/src/file" but NOT "/src2/file".
+                    let base = base.trim_end_matches('/');
+                    (**p == base || p.starts_with(&format!("{base}/")))
+                        && matcher.is_match(p)
                 } else {
                     matcher.is_match(p)
                 }
@@ -869,9 +878,16 @@ mod composite_backend {
         }
 
         /// Find the backend for a given path (longest matching prefix).
+        ///
+        /// The match is path-separator-aware: a mount at `/src` matches
+        /// `/src` and `/src/file` but NOT `/src2/file`. This prevents
+        /// accidental routing to the wrong child backend.
         fn route(&self, path: &str) -> Option<(&str, &Arc<dyn Backend>)> {
             for (prefix, backend) in &self.children {
-                if path.starts_with(prefix.as_str()) {
+                // Exact match OR path starts with "prefix/"
+                // (with trailing-slash tolerance on the prefix).
+                let prefix_trimmed = prefix.trim_end_matches('/');
+                if path == prefix_trimmed || path.starts_with(&format!("{prefix_trimmed}/")) {
                     return Some((prefix.as_str(), backend));
                 }
             }
@@ -1320,5 +1336,88 @@ mod tests {
         let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
         assert!(paths.iter().any(|p| p.starts_with("/src")));
         assert!(paths.iter().any(|p| p.starts_with("/tmp")));
+    }
+
+    // ── Path-separator-aware prefix matching ───────────────────────────
+    //
+    // These tests verify that "/src" as a path filter does NOT match
+    // "/src2/..." — a bug that raw `starts_with` would introduce.
+    // The fix uses path-separator-aware prefix matching everywhere
+    // a path prefix is compared.
+
+    #[tokio::test]
+    async fn test_state_backend_glob_path_separator_aware() {
+        let backend = StateBackend::new();
+        backend.write("/src/main.rs", "fn main()").await.unwrap();
+        backend
+            .write("/src2/other.rs", "fn other()")
+            .await
+            .unwrap();
+
+        // glob with path="/src" should only match /src/**, not /src2/**
+        let result = backend.glob("/**/*.rs", Some("/src")).await.unwrap();
+        assert_eq!(result.paths.len(), 1);
+        assert!(result.paths.contains(&"/src/main.rs".to_string()));
+        assert!(!result.paths.contains(&"/src2/other.rs".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_state_backend_glob_path_separator_exact_match() {
+        // When path is an exact file path (not a directory), it should
+        // still match that single file.
+        let backend = StateBackend::new();
+        backend.write("/src/main.rs", "fn main()").await.unwrap();
+
+        let result = backend.glob("/src/main.rs", Some("/src/main.rs")).await.unwrap();
+        assert_eq!(result.paths.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_state_backend_grep_path_separator_aware() {
+        let backend = StateBackend::new();
+        backend.write("/src/file.txt", "match\nfoo").await.unwrap();
+        backend.write("/src2/file.txt", "match\nbar").await.unwrap();
+
+        // grep with path="/src" should only search /src/**, not /src2/**
+        let result = backend.grep("match", Some("/src"), None, None)
+            .await
+            .unwrap();
+        assert_eq!(result.matches.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_state_backend_grep_path_trailing_slash() {
+        // Trailing slash on the path should be tolerated.
+        let backend = StateBackend::new();
+        backend.write("/src/file.txt", "match").await.unwrap();
+        backend.write("/src2/file.txt", "match").await.unwrap();
+
+        let result = backend.grep("match", Some("/src/"), None, None)
+            .await
+            .unwrap();
+        assert_eq!(result.matches.len(), 1);
+    }
+
+    #[cfg(feature = "composite")]
+    #[tokio::test]
+    async fn test_composite_route_separator_aware() {
+        // Mount at /src should NOT route /src2/file to the /src child.
+        let child_src = Arc::new(StateBackend::new()) as Arc<dyn Backend>;
+        let child_src2 = Arc::new(StateBackend::new()) as Arc<dyn Backend>;
+
+        let mut composite = CompositeBackend::new();
+        composite.mount("/src", child_src.clone());
+        composite.mount("/src2", child_src2.clone());
+
+        // Write to /src2/file.txt — should route to child_src2, not child_src
+        composite.write("/src2/file.txt", "in src2").await.unwrap();
+
+        // child_src2 should have the file (as /file.txt after strip_prefix)
+        let r = child_src2.read("/file.txt", 0, 0).await.unwrap();
+        assert_eq!(r.content, "in src2");
+
+        // child_src should NOT have /file.txt
+        let r = child_src.read("/file.txt", 0, 0).await;
+        assert!(r.is_err(), "child_src should not have /file.txt");
     }
 }

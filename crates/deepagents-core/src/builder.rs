@@ -101,6 +101,10 @@ where
     model: M,
     model_spec: Option<ModelSpec>,
     // #2 tools (accumulated as tool specs; resolved at build)
+    //
+    // v0 stub: tool specs are stored but not yet wired into the rig
+    // AgentBuilder. v1 will register them as concrete tool implementations
+    // backed by the Backend trait.
     tool_specs: Vec<crate::subagent::ToolSpec>,
     // #3 system prompt (USER slot)
     system_prompt: Option<String>,
@@ -110,8 +114,16 @@ where
     // #5 subagents
     subagents: Vec<SubAgentSpec>,
     // #6 skills
+    //
+    // v0 stub: skill file paths are stored but not yet read or injected
+    // into the system prompt. v1 will load SKILL.md files and append their
+    // contents to the prompt assembly (parameter #6).
     skills: Vec<PathBuf>,
     // #7 memory files (AGENTS.md paths)
+    //
+    // v0 stub: memory file paths are stored but not yet read or injected
+    // into the system prompt. v1 will load AGENTS.md files and prepend
+    // their contents to the BASE prompt slot (parameter #7).
     memory_files: Vec<PathBuf>,
     // #8 permissions
     permissions: Vec<FilesystemPermission>,

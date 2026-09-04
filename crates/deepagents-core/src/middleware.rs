@@ -6,6 +6,7 @@
 //!
 //! See `docs/SPEC.md` §Q5 for the mapping table and design rationale.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use rig_agent::agent::{
@@ -21,6 +22,12 @@ use crate::backend::Backend;
 use crate::permission::{FilesystemOperation, FilesystemPermission, PermissionChecker, PermissionMode};
 
 // ── FilesystemMiddleware ──────────────────────────────────────────────
+
+/// Monotonic counter for eviction filenames, ensuring uniqueness across
+/// concurrent tool results and multiple agent turns. Using a process-wide
+/// counter (rather than `internal_call_id`) prevents both filename collisions
+/// and path-traversal issues from untrusted call IDs.
+static EVICTION_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// The filesystem middleware: contributes file tools and intercepts
 /// completion calls to inject filesystem instructions and dynamically
@@ -260,11 +267,21 @@ impl AgentHook for FilesystemMiddleware {
     ) -> impl std::future::Future<Output = ToolResultAction> + WasmCompatSend {
         // Evict large results to a file, replacing the presentation with
         // a pointer to the evicted file.
+        //
+        // The eviction filename is derived from a monotonically increasing
+        // counter (not from `internal_call_id`) to avoid:
+        //   1. Filename collisions when the same call_id appears across
+        //      multiple runs or agent turns.
+        //   2. Path traversal: `internal_call_id` is a `&str` from the rig
+        //      runtime and could theoretically contain `/`, `..`, or other
+        //      shell-unsafe characters. Using a pure numeric counter sidesteps
+        //      any sanitization burden.
         let presentation_text = event.presentation.as_text().unwrap_or("").to_string();
         let len = presentation_text.len();
         let threshold = self.eviction_threshold;
         let backend = self.backend.clone();
-        let evicted_path = format!("/tmp/tool_output_{}.txt", event.internal_call_id);
+        let seq = EVICTION_SEQ.fetch_add(1, Ordering::Relaxed);
+        let evicted_path = format!("/tmp/tool_output_{seq}.txt");
 
         async move {
             if len > threshold {
