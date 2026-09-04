@@ -1,0 +1,29 @@
+# z-fde-loop 配置（层：default < global ~/.z-fde-loop/config.toml < 本文件 < env < flag）
+# 本项目采用 rpc 后端：loop 每轮 spawn `z-fde --mode=rpc` 进程，本地强隔离，无需常驻 server。
+
+[loop]
+backend = "rpc"            # rpc：每轮 spawn z-fde 进程（ws 需常驻 server，本配置不用）
+log_dir = "~/.z-fde-loop"
+max_rounds = 25
+language = "zh"
+workspace = "."
+
+[rpc]
+binary = "z-fde"           # PATH 可见；否则用绝对路径，如 /Users/mac/.local/bin/z-fde
+extra_args = []            # 透传给 z-fde 的额外参数（model/provider 由 z-fde 自身 env/flag 决定，loop 不经手 LLM key）
+startup_timeout_sec = 15   # rpc 进程 initialize 握手超时
+
+[budget]
+max_rounds = 25
+manager_timeout_sec = 600
+executor_timeout_sec = 1800
+auditor_timeout_sec = 600
+
+# ws 段保留默认（rpc 模式不使用，但 init/doctor ws 分支会读）
+[ws]
+url = "ws://127.0.0.1:8080/rpc"
+api_key_env = "ZFDE_WS_API_KEY"
+
+[server]
+listen = "127.0.0.1:8799"
+sse_keepalive_sec = 15

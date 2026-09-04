@@ -1,0 +1,67 @@
+[
+  {
+    "provider": "openai",
+    "model": "gpt-4o",
+    "input_per_token": 0.0000025,
+    "output_per_token": 0.00001,
+    "cache_read_per_token": 0.00000125,
+    "cache_write_generic_per_token": 0.0,
+    "cache_write_5m_per_token": 0.0,
+    "cache_write_1h_per_token": 0.0,
+    "input_audio_per_token": 0.0000007,
+    "output_audio_per_token": 0.000005,
+    "reasoning_per_token": 0.0
+  },
+  {
+    "provider": "openai",
+    "model": "gpt-4o-mini",
+    "input_per_token": 0.00000015,
+    "output_per_token": 0.0000006,
+    "cache_read_per_token": 0.000000075,
+    "cache_write_generic_per_token": 0.0,
+    "cache_write_5m_per_token": 0.0,
+    "cache_write_1h_per_token": 0.0,
+    "input_audio_per_token": 0.0000001,
+    "output_audio_per_token": 0.0000012,
+    "reasoning_per_token": 0.0
+  },
+  {
+    "provider": "anthropic",
+    "model": "claude-3-5-sonnet",
+    "input_per_token": 0.000003,
+    "output_per_token": 0.000015,
+    "cache_read_per_token": 0.0000003,
+    "cache_write_generic_per_token": 0.0,
+    "cache_write_5m_per_token": 0.00000375,
+    "cache_write_1h_per_token": 0.000003,
+    "input_audio_per_token": 0.0,
+    "output_audio_per_token": 0.0,
+    "reasoning_per_token": 0.0
+  },
+  {
+    "provider": "google",
+    "model": "gemini-1.5-pro",
+    "input_per_token": 0.00000125,
+    "output_per_token": 0.000005,
+    "cache_read_per_token": 0.0,
+    "cache_write_generic_per_token": 0.0,
+    "cache_write_5m_per_token": 0.0,
+    "cache_write_1h_per_token": 0.0,
+    "input_audio_per_token": 0.0,
+    "output_audio_per_token": 0.0,
+    "reasoning_per_token": 0.0
+  },
+  {
+    "provider": "bedrock",
+    "model": "anthropic.claude-3-5-sonnet",
+    "input_per_token": 0.000003,
+    "output_per_token": 0.000015,
+    "cache_read_per_token": 0.0000003,
+    "cache_write_generic_per_token": 0.0,
+    "cache_write_5m_per_token": 0.00000375,
+    "cache_write_1h_per_token": 0.0,
+    "input_audio_per_token": 0.0,
+    "output_audio_per_token": 0.0,
+    "reasoning_per_token": 0.0
+  }
+]

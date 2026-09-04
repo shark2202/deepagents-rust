@@ -23,4 +23,8 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 deepagents-errors = { workspace = true }
 
+[dev-dependencies]
+# Only needed to drive async tests; not a runtime dependency of the library.
+tokio = { workspace = true }
+
 # Q-ref: Q25

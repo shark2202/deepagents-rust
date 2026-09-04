@@ -14,6 +14,28 @@ path = "src/lib.rs"
 [dependencies]
 deepagents-core = { workspace = true }
 deepagents-config = { workspace = true }
+deepagents-env = { workspace = true }
 deepagents-errors = { workspace = true }
+deepagents-hooks = { workspace = true }
+deepagents-plugins = { workspace = true }
+deepagents-sessions = { workspace = true }
+deepagents-approval = { workspace = true }
+deepagents-mcp = { workspace = true }
+deepagents-skills = { workspace = true }
+deepagents-sandbox = { workspace = true }
+deepagents-cost = { workspace = true }
+deepagents-goal = { workspace = true }
+deepagents-onboarding = { workspace = true }
+deepagents-update = { workspace = true }
+deepagents-doctor = { workspace = true }
+deepagents-cli = { workspace = true, optional = true }
+deepagents-tui = { workspace = true, optional = true }
+
+[features]
+default = ["cli", "tui"]
+# CLI sub-crate (clap derive + command dispatch).
+cli = ["dep:deepagents-cli"]
+# TUI sub-crate (ratatui + crossterm).
+tui = ["dep:deepagents-tui"]
 
 # Q-ref: Q1-Q26
