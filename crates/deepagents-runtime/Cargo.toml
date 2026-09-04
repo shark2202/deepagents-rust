@@ -1,6 +1,6 @@
 [package]
-name = "deepagents-cli"
-description = "clap, 13 subcommands (Q13)"
+name = "deepagents-runtime"
+description = "Runtime: provider resolution, model factory, real LLM wiring (Q9-Q10)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,18 +12,17 @@ repository.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-clap = { workspace = true }
+rig-core = { workspace = true }
+rig-agent = { workspace = true }
 tokio = { workspace = true }
+async-trait = { workspace = true }
 serde = { workspace = true }
-thiserror = { workspace = true }
+serde_json = { workspace = true }
 tracing = { workspace = true }
+thiserror = { workspace = true }
 deepagents-core = { workspace = true }
 deepagents-config = { workspace = true }
+deepagents-env = { workspace = true }
 deepagents-errors = { workspace = true }
-deepagents-runtime = { workspace = true }
 
-[[bin]]
-name = "deepagents"
-path = "src/main.rs"
-
-# Q-ref: Q13
+# Q-ref: Q9-Q10

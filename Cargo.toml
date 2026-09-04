@@ -24,6 +24,7 @@ members = [
     "crates/deepagents-update",
     "crates/deepagents-doctor",
     "crates/deepagents-errors",
+    "crates/deepagents-runtime",
 ]
 
 [workspace.package]
@@ -105,6 +106,7 @@ deepagents-onboarding = { path = "crates/deepagents-onboarding" }
 deepagents-update = { path = "crates/deepagents-update" }
 deepagents-doctor = { path = "crates/deepagents-doctor" }
 deepagents-errors = { path = "crates/deepagents-errors" }
+deepagents-runtime = { path = "crates/deepagents-runtime" }
 
 [profile.release]
 opt-level = 3
