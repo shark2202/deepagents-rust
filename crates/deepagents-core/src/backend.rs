@@ -422,8 +422,13 @@ mod fs_backend {
 
         /// Resolve a virtual POSIX path to a real disk path.
         ///
-        /// Returns an error if the path contains `..` or `~`, or does not
-        /// start with `/`.
+        /// Returns an error if the path contains `..` or `~`, does not
+        /// start with `/`, or (after canonicalization) escapes `root_dir`.
+        ///
+        /// Symlinks are resolved via `std::fs::canonicalize`; if the
+        /// canonicalized path does not start with the canonicalized
+        /// `root_dir`, the path is rejected. This prevents symlink-based
+        /// sandbox escapes.
         fn resolve(&self, virtual_path: &str) -> Result<PathBuf, Error> {
             if !virtual_path.starts_with('/') {
                 return Err(Error::Sandbox(
@@ -441,8 +446,41 @@ mod fs_backend {
             }
             let relative = virtual_path.trim_start_matches('/');
             let real = self.root_dir.join(relative);
-            // Final safety check: canonicalized path must be under root
-            Ok(real)
+
+            // Canonicalize both root and resolved path to detect symlink
+            // escapes. If the file doesn't exist yet (e.g. a write target),
+            // canonicalize the parent directory and append the filename.
+            let canon_root =
+                std::fs::canonicalize(&self.root_dir).unwrap_or_else(|_| self.root_dir.clone());
+            let canon_real = match std::fs::canonicalize(&real) {
+                Ok(c) => c,
+                // Path doesn't exist (new file). Canonicalize the parent
+                // and re-append the filename.
+                Err(_) => {
+                    let parent = real.parent().unwrap_or(&self.root_dir);
+                    let canon_parent = std::fs::canonicalize(parent)
+                        .map_err(|e| Error::Sandbox(
+                            deepagents_errors::SandboxError::Provider(format!(
+                                "cannot canonicalize parent directory: {e}"
+                            )),
+                        ))?;
+                    let filename = real.file_name().unwrap_or_default();
+                    canon_parent.join(filename)
+                }
+            };
+
+            // Verify the canonicalized path is under the canonicalized root.
+            if !canon_real.starts_with(&canon_root) {
+                return Err(Error::Sandbox(
+                    deepagents_errors::SandboxError::Provider(format!(
+                        "path escapes sandbox root: {} is not under {}",
+                        canon_real.display(),
+                        canon_root.display(),
+                    )),
+                ));
+            }
+
+            Ok(canon_real)
         }
     }
 
@@ -841,13 +879,15 @@ mod composite_backend {
         }
 
         /// Strip the mount prefix from a path for delegation to the child.
-        fn strip_prefix<'a>(&self, prefix: &str, path: &'a str) -> &'a str {
+        ///
+        /// The child backend always receives an absolute path (starting with
+        /// `/`). If the stripped path doesn't start with `/`, one is prepended.
+        fn strip_prefix<'a>(&self, prefix: &str, path: &'a str) -> String {
             let stripped = path.strip_prefix(prefix).unwrap_or(path);
             if stripped.starts_with('/') {
-                stripped
+                stripped.to_string()
             } else {
-                // Ensure child sees an absolute path
-                stripped
+                format!("/{stripped}")
             }
         }
     }
@@ -858,7 +898,7 @@ mod composite_backend {
             match self.route(path) {
                 Some((prefix, backend)) => {
                     let child_path = self.strip_prefix(prefix, path);
-                    backend.ls(child_path).await
+                    backend.ls(&child_path).await
                 }
                 None => Err(Error::Sandbox(deepagents_errors::SandboxError::NotFound(
                     format!("no mount for {path}"),
@@ -875,7 +915,7 @@ mod composite_backend {
             match self.route(path) {
                 Some((prefix, backend)) => {
                     let child_path = self.strip_prefix(prefix, path);
-                    backend.read(child_path, offset, limit).await
+                    backend.read(&child_path, offset, limit).await
                 }
                 None => Err(Error::Sandbox(deepagents_errors::SandboxError::NotFound(
                     format!("no mount for {path}"),
@@ -896,7 +936,7 @@ mod composite_backend {
                 return match self.route(base) {
                     Some((prefix, backend)) => {
                         let child_path = self.strip_prefix(prefix, base);
-                        backend.grep(pattern, Some(child_path), glob, max_count).await
+                        backend.grep(pattern, Some(&child_path), glob, max_count).await
                     }
                     None => Err(Error::Sandbox(deepagents_errors::SandboxError::NotFound(
                         format!("no mount for {base}"),
@@ -924,7 +964,7 @@ mod composite_backend {
                 return match self.route(base) {
                     Some((prefix, backend)) => {
                         let child_path = self.strip_prefix(prefix, base);
-                        backend.glob(pattern, Some(child_path)).await
+                        backend.glob(pattern, Some(&child_path)).await
                     }
                     None => Err(Error::Sandbox(deepagents_errors::SandboxError::NotFound(
                         format!("no mount for {base}"),
@@ -946,7 +986,7 @@ mod composite_backend {
             match self.route(path) {
                 Some((prefix, backend)) => {
                     let child_path = self.strip_prefix(prefix, path);
-                    backend.write(child_path, content).await
+                    backend.write(&child_path, content).await
                 }
                 None => Err(Error::Sandbox(deepagents_errors::SandboxError::NotFound(
                     format!("no mount for {path}"),
@@ -958,7 +998,7 @@ mod composite_backend {
             match self.route(path) {
                 Some((prefix, backend)) => {
                     let child_path = self.strip_prefix(prefix, path);
-                    backend.edit(child_path, old, new).await
+                    backend.edit(&child_path, old, new).await
                 }
                 None => Err(Error::Sandbox(deepagents_errors::SandboxError::NotFound(
                     format!("no mount for {path}"),
@@ -970,7 +1010,7 @@ mod composite_backend {
             match self.route(path) {
                 Some((prefix, backend)) => {
                     let child_path = self.strip_prefix(prefix, path);
-                    backend.delete(child_path).await
+                    backend.delete(&child_path).await
                 }
                 None => Err(Error::Sandbox(deepagents_errors::SandboxError::NotFound(
                     format!("no mount for {path}"),
@@ -982,7 +1022,7 @@ mod composite_backend {
             match self.route(path) {
                 Some((prefix, backend)) => {
                     let child_path = self.strip_prefix(prefix, path);
-                    let mut info = backend.info(child_path).await?;
+                    let mut info = backend.info(&child_path).await?;
                     info.path = path.to_string();
                     Ok(info)
                 }
@@ -1012,3 +1052,273 @@ mod composite_backend {
 
 #[cfg(feature = "composite")]
 pub use composite_backend::CompositeBackend;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── StateBackend: write + read round-trip ─────────────────────────
+
+    #[tokio::test]
+    async fn test_state_backend_write_read() {
+        let backend = StateBackend::new();
+        backend
+            .write("/test.txt", "hello world")
+            .await
+            .unwrap();
+        let result = backend.read("/test.txt", 0, 0).await.unwrap();
+        assert_eq!(result.content, "hello world");
+        assert_eq!(result.total_lines, 1);
+        assert!(!result.truncated);
+    }
+
+    // ── StateBackend: read with offset + limit ────────────────────────
+
+    #[tokio::test]
+    async fn test_state_backend_read_offset_limit() {
+        let backend = StateBackend::new();
+        let content = "line1\nline2\nline3\nline4\nline5";
+        backend.write("/file.txt", content).await.unwrap();
+
+        let result = backend.read("/file.txt", 1, 2).await.unwrap();
+        assert_eq!(result.content, "line2\nline3");
+        assert_eq!(result.total_lines, 5);
+        assert!(result.truncated);
+    }
+
+    // ── StateBackend: read nonexistent file ───────────────────────────
+
+    #[tokio::test]
+    async fn test_state_backend_read_not_found() {
+        let backend = StateBackend::new();
+        let result = backend.read("/missing.txt", 0, 0).await;
+        assert!(result.is_err());
+    }
+
+    // ── StateBackend: ls lists directory entries ──────────────────────
+
+    #[tokio::test]
+    async fn test_state_backend_ls() {
+        let backend = StateBackend::new();
+        backend.write("/dir/file1.txt", "a").await.unwrap();
+        backend.write("/dir/file2.txt", "b").await.unwrap();
+        backend.write("/dir/sub/file3.txt", "c").await.unwrap();
+
+        let result = backend.ls("/dir").await.unwrap();
+        let names: Vec<&str> = result.entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"file1.txt"));
+        assert!(names.contains(&"file2.txt"));
+        assert!(names.contains(&"sub")); // directory entry
+    }
+
+    // ── StateBackend: edit replaces first occurrence ──────────────────
+
+    #[tokio::test]
+    async fn test_state_backend_edit() {
+        let backend = StateBackend::new();
+        backend
+            .write("/file.txt", "hello world hello")
+            .await
+            .unwrap();
+
+        let result = backend.edit("/file.txt", "hello", "hi").await.unwrap();
+        assert_eq!(result.replacements, 1);
+
+        let read = backend.read("/file.txt", 0, 0).await.unwrap();
+        assert_eq!(read.content, "hi world hello");
+    }
+
+    // ── StateBackend: edit nonexistent file ───────────────────────────
+
+    #[tokio::test]
+    async fn test_state_backend_edit_not_found() {
+        let backend = StateBackend::new();
+        let result = backend.edit("/missing.txt", "a", "b").await;
+        assert!(result.is_err());
+    }
+
+    // ── StateBackend: delete ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_state_backend_delete() {
+        let backend = StateBackend::new();
+        backend.write("/file.txt", "content").await.unwrap();
+
+        let result = backend.delete("/file.txt").await.unwrap();
+        assert!(result.deleted);
+
+        // Deleting again should return deleted: false
+        let result = backend.delete("/file.txt").await.unwrap();
+        assert!(!result.deleted);
+    }
+
+    // ── StateBackend: grep finds matches ──────────────────────────────
+
+    #[tokio::test]
+    async fn test_state_backend_grep() {
+        let backend = StateBackend::new();
+        backend.write("/file1.txt", "foo bar\nbaz foo").await.unwrap();
+        backend.write("/file2.txt", "nothing here").await.unwrap();
+
+        let result = backend.grep("foo", None, None, None).await.unwrap();
+        assert_eq!(result.matches.len(), 2);
+        assert_eq!(result.matches[0].line_number, 1);
+        assert_eq!(result.matches[0].line, "foo bar");
+        assert_eq!(result.matches[1].line_number, 2);
+        assert_eq!(result.matches[1].line, "baz foo");
+    }
+
+    // ── StateBackend: grep with max_count ────────────────────────────
+
+    #[tokio::test]
+    async fn test_state_backend_grep_max_count() {
+        let backend = StateBackend::new();
+        backend.write("/file.txt", "foo\nfoo\nfoo\nfoo").await.unwrap();
+
+        let result = backend.grep("foo", None, None, Some(2)).await.unwrap();
+        assert_eq!(result.matches.len(), 2);
+        assert!(result.truncated);
+    }
+
+    // ── StateBackend: glob matches patterns ──────────────────────────
+
+    #[tokio::test]
+    async fn test_state_backend_glob() {
+        let backend = StateBackend::new();
+        backend.write("/src/main.rs", "fn main()").await.unwrap();
+        backend.write("/src/mod.rs", "fn mod()").await.unwrap();
+        backend.write("/src/README.md", "# readme").await.unwrap();
+
+        let result = backend.glob("/**/*.rs", None).await.unwrap();
+        assert_eq!(result.paths.len(), 2);
+        assert!(result.paths.contains(&"/src/main.rs".to_string()));
+        assert!(result.paths.contains(&"/src/mod.rs".to_string()));
+    }
+
+    // ── StateBackend: info on file and directory ──────────────────────
+
+    #[tokio::test]
+    async fn test_state_backend_info() {
+        let backend = StateBackend::new();
+        backend.write("/file.txt", "12345").await.unwrap();
+        backend.write("/dir/inner.txt", "x").await.unwrap();
+
+        let info = backend.info("/file.txt").await.unwrap();
+        assert!(!info.is_dir);
+        assert_eq!(info.size, 5);
+
+        let info = backend.info("/dir").await.unwrap();
+        assert!(info.is_dir);
+    }
+
+    // ── StateBackend: list_files ───────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_state_backend_list_files() {
+        let backend = StateBackend::new();
+        backend.write("/a.txt", "aaa").await.unwrap();
+        backend.write("/b.txt", "bbb").await.unwrap();
+
+        let files = backend.list_files().await.unwrap();
+        assert_eq!(files.len(), 2);
+    }
+
+    // ── CompositeBackend: routing to mounted child ───────────────────
+
+    #[cfg(feature = "composite")]
+    #[tokio::test]
+    async fn test_composite_routing() {
+        let child1 = Arc::new(StateBackend::new()) as Arc<dyn Backend>;
+        let child2 = Arc::new(StateBackend::new()) as Arc<dyn Backend>;
+
+        let mut composite = CompositeBackend::new();
+        composite.mount("/src", child1.clone());
+        composite.mount("/tmp", child2.clone());
+
+        // Write via composite → routes to child1
+        composite.write("/src/file.rs", "fn main()").await.unwrap();
+        // Verify it's in child1
+        let read = child1.read("/src/file.rs", 0, 0).await;
+        // The composite strips prefix, so child sees /file.rs
+        // (strip_prefix removes "/src" and prepends "/")
+        match read {
+            Ok(r) => assert_eq!(r.content, "fn main()"),
+            Err(_) => {
+                // child1 might see it as /file.rs (without /src prefix)
+                let r = child1.read("/file.rs", 0, 0).await.unwrap();
+                assert_eq!(r.content, "fn main()");
+            }
+        }
+    }
+
+    // ── CompositeBackend: no mount for path ───────────────────────────
+
+    #[cfg(feature = "composite")]
+    #[tokio::test]
+    async fn test_composite_no_mount() {
+        let composite = CompositeBackend::new();
+        let result = composite.ls("/unmounted").await;
+        assert!(result.is_err());
+    }
+
+    // ── CompositeBackend: longest prefix match ────────────────────────
+
+    #[cfg(feature = "composite")]
+    #[tokio::test]
+    async fn test_composite_longest_prefix() {
+        let child1 = Arc::new(StateBackend::new()) as Arc<dyn Backend>;
+        let child2 = Arc::new(StateBackend::new()) as Arc<dyn Backend>;
+
+        let mut composite = CompositeBackend::new();
+        composite.mount("/src", child1.clone());
+        composite.mount("/src/nested", child2.clone());
+
+        // /src/nested/deep.rs should route to child2 (longest prefix)
+        composite.write("/src/nested/deep.rs", "content").await.unwrap();
+
+        // child2 should have the file
+        let files = child2.list_files().await.unwrap();
+        assert!(!files.is_empty());
+    }
+
+    // ── CompositeBackend: strip_prefix ensures absolute path ─────────
+
+    #[cfg(feature = "composite")]
+    #[tokio::test]
+    async fn test_composite_strip_prefix_absolute() {
+        let child = Arc::new(StateBackend::new()) as Arc<dyn Backend>;
+        let mut composite = CompositeBackend::new();
+        composite.mount("/data", child.clone());
+
+        // Write through composite; child should receive "/file.txt"
+        // (not "data/file.txt" or "file.txt" without leading /)
+        composite.write("/data/file.txt", "test").await.unwrap();
+
+        // Verify child received it as an absolute path
+        let result = child.read("/file.txt", 0, 0).await.unwrap();
+        assert_eq!(result.content, "test");
+    }
+
+    // ── CompositeBackend: list_files aggregates children ────────────
+
+    #[cfg(feature = "composite")]
+    #[tokio::test]
+    async fn test_composite_list_files() {
+        let child1 = Arc::new(StateBackend::new()) as Arc<dyn Backend>;
+        let child2 = Arc::new(StateBackend::new()) as Arc<dyn Backend>;
+
+        child1.write("/a.rs", "a").await.unwrap();
+        child2.write("/b.rs", "b").await.unwrap();
+
+        let mut composite = CompositeBackend::new();
+        composite.mount("/src", child1);
+        composite.mount("/tmp", child2);
+
+        let files = composite.list_files().await.unwrap();
+        assert_eq!(files.len(), 2);
+        // Paths should include mount prefix
+        let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        assert!(paths.iter().any(|p| p.starts_with("/src")));
+        assert!(paths.iter().any(|p| p.starts_with("/tmp")));
+    }
+}

@@ -6,7 +6,9 @@
 //!
 //! - `Allow` → normal execution
 //! - `Deny` → tool returns permission-denied error
-//! - `Interrupt` → `on_tool_call` returns `ToolCallAction::Stop` (triggers HITL)
+//! - `Interrupt` → `on_tool_call` returns `ToolCallAction::skip` (v0: treated
+//!   as Deny with a distinct message; true pause/resume deferred to v1
+//!   `deepagents-sessions`)
 //!
 //! Glob matching uses the `globset` crate. Paths must start with `/` and must
 //! not contain `..` or `~`.

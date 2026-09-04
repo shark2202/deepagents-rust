@@ -516,6 +516,27 @@ impl SummarizationMiddleware {
         result.extend(history[start..].iter().cloned());
         result
     }
+
+    /// Truncate a tool result text to `max_tool_result_chars` characters.
+    ///
+    /// Returns `Some(rewritten_string)` if truncation was needed, or `None`
+    /// if the text fits within the limit. Truncation is by character (not
+    /// byte) boundary, so multi-byte UTF-8 sequences are never split.
+    ///
+    /// This is the core logic behind [`on_tool_result`](AgentHook::on_tool_result),
+    /// extracted for direct testability without constructing rig types.
+    pub fn truncate_tool_result(&self, text: &str) -> Option<String> {
+        let max_chars = self.max_tool_result_chars;
+        let char_count = text.chars().count();
+        if char_count > max_chars {
+            let truncated: String = text.chars().take(max_chars).collect();
+            Some(format!(
+                "{truncated}\n... (truncated, {char_count} chars total)"
+            ))
+        } else {
+            None
+        }
+    }
 }
 
 impl std::fmt::Debug for SummarizationMiddleware {
@@ -604,12 +625,13 @@ impl AgentHook for SummarizationMiddleware {
 
         async move {
             if let Some(text) = text {
-                if text.len() > max_chars {
-                    let safe_end = max_chars.min(text.len());
+                // Count by characters, not bytes, to avoid splitting
+                // multi-byte UTF-8 sequences (which would panic).
+                let char_count = text.chars().count();
+                if char_count > max_chars {
+                    let truncated: String = text.chars().take(max_chars).collect();
                     let truncated = format!(
-                        "{}\n... (truncated, {} chars total)",
-                        &text[..safe_end],
-                        text.len()
+                        "{truncated}\n... (truncated, {char_count} chars total)"
                     );
                     return ToolResultAction::rewrite(truncated);
                 }
@@ -719,5 +741,108 @@ mod tests {
             .collect();
         let truncated = mw.truncate_history(&history);
         assert_eq!(truncated.len(), 5);
+    }
+
+    // ── SummarizationMiddleware: UTF-8 truncation ─────────────────────
+
+    #[test]
+    fn test_summarization_truncate_tool_result_ascii() {
+        let mw = SummarizationMiddleware::new().with_max_tool_result_chars(10);
+        let text = "0123456789ABCDEF"; // 16 chars
+        let result = mw.truncate_tool_result(text);
+        assert!(result.is_some());
+        let rewritten = result.unwrap();
+        assert!(rewritten.starts_with("0123456789"));
+        assert!(rewritten.contains("(truncated, 16 chars total)"));
+    }
+
+    #[test]
+    fn test_summarization_truncate_tool_result_no_truncation() {
+        let mw = SummarizationMiddleware::new().with_max_tool_result_chars(100);
+        let text = "short text";
+        let result = mw.truncate_tool_result(text);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_summarization_truncate_tool_result_multibyte() {
+        // "你好世界" = 4 chars, 12 bytes (each char is 3 bytes in UTF-8).
+        // Repeat it 1000 times → 4000 chars, 12000 bytes.
+        // With max_tool_result_chars = 10, we should get exactly 10 chars
+        // (not crash on byte-boundary split).
+        let unit = "你好世界"; // 4 chars
+        let text = unit.repeat(1000); // 4000 chars
+        let mw = SummarizationMiddleware::new().with_max_tool_result_chars(10);
+        let result = mw.truncate_tool_result(&text);
+        assert!(result.is_some());
+        let rewritten = result.unwrap();
+        // The truncated portion should be exactly 10 chars of `unit` repeated
+        // "你好世界" repeated 2.5 times = "你好世界你好世界你好"
+        let expected_prefix: String = unit.chars().cycle().take(10).collect();
+        assert!(rewritten.starts_with(&expected_prefix));
+        assert!(rewritten.contains("(truncated, 4000 chars total)"));
+        // Verify no panic: the rewritten string is valid UTF-8
+        assert!(std::str::from_utf8(rewritten.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn test_summarization_truncate_tool_result_emoji() {
+        // Emojis are 4-byte UTF-8 chars. Ensure truncation doesn't split.
+        // 😀 = U+1F600, 4 bytes in UTF-8.
+        let text = "😀".repeat(100); // 100 chars, 400 bytes
+        let mw = SummarizationMiddleware::new().with_max_tool_result_chars(5);
+        let result = mw.truncate_tool_result(&text);
+        assert!(result.is_some());
+        let rewritten = result.unwrap();
+        // First 5 chars should be 5 emoji
+        assert_eq!(rewritten.chars().take(5).collect::<String>(), "😀😀😀😀😀");
+        assert!(rewritten.contains("(truncated, 100 chars total)"));
+        // Valid UTF-8
+        assert!(std::str::from_utf8(rewritten.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn test_summarization_truncate_tool_result_boundary_exact() {
+        // Text length exactly equals max → no truncation
+        let mw = SummarizationMiddleware::new().with_max_tool_result_chars(5);
+        let text = "abcde"; // exactly 5 chars
+        let result = mw.truncate_tool_result(text);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_summarization_truncate_tool_result_boundary_plus_one() {
+        // Text length = max + 1 → truncation, truncated text = max chars
+        let mw = SummarizationMiddleware::new().with_max_tool_result_chars(5);
+        let text = "abcdef"; // 6 chars
+        let result = mw.truncate_tool_result(text);
+        assert!(result.is_some());
+        let rewritten = result.unwrap();
+        assert!(rewritten.starts_with("abcde"));
+        assert!(rewritten.contains("(truncated, 6 chars total)"));
+    }
+
+    #[test]
+    fn test_summarization_truncate_tool_result_empty() {
+        let mw = SummarizationMiddleware::new().with_max_tool_result_chars(10);
+        let result = mw.truncate_tool_result("");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_summarization_truncate_tool_result_mixed_multibyte() {
+        // Mix of ASCII and multi-byte chars to test boundary safety
+        // "a你b好c" = 5 chars, but bytes = 1+3+1+3+1 = 9 bytes
+        let unit = "a你b好c"; // 5 chars
+        let text = unit.repeat(100); // 500 chars
+        let mw = SummarizationMiddleware::new().with_max_tool_result_chars(7);
+        let result = mw.truncate_tool_result(&text);
+        assert!(result.is_some());
+        let rewritten = result.unwrap();
+        // First 7 chars: "a你b好ca你" (7 chars from the cycle)
+        let expected_prefix: String = unit.chars().cycle().take(7).collect();
+        assert!(rewritten.starts_with(&expected_prefix));
+        assert!(rewritten.contains("(truncated, 500 chars total)"));
+        assert!(std::str::from_utf8(rewritten.as_bytes()).is_ok());
     }
 }
