@@ -28,7 +28,13 @@ use crate::subagent::{
 // ── Placeholder traits for v0 (forward declarations) ──────────────────
 
 /// A checkpointer trait (v0: stub, maps to parameter #14).
-/// The real implementation lives in `deepagents-sessions`.
+///
+/// **v0 status: not connected.** The `checkpointer` field is accepted by
+/// [`DeepAgentBuilder`](crate::DeepAgentBuilder) and stored, but `build()`
+/// does not yet use it. True checkpointing requires a custom runner wrapper
+/// that serializes the `AgentRunner` state between turns — this will be
+/// implemented in `deepagents-sessions` (v1), alongside true HITL
+/// pause/resume (see `docs/adr/0001-rig-as-base.md`).
 pub trait Checkpointer: Send + Sync {
     /// Save a checkpoint.
     fn save(&self, id: &str, state: &serde_json::Value) -> Result<(), String>;
@@ -148,7 +154,12 @@ impl CompletionModel for MockModelPlaceholder {
             rig_core::completion::CompletionError,
         >,
     > + WasmCompatSend {
-        async { unimplemented!("DeepAgentBuilder requires a model — call .model(...) before .build()") }
+        async {
+            Err(rig_core::completion::CompletionError::ResponseError(
+                "DeepAgentBuilder: no model configured — call .model(...) before .build()"
+                    .to_string(),
+            ))
+        }
     }
 
     fn stream(
@@ -160,7 +171,12 @@ impl CompletionModel for MockModelPlaceholder {
             rig_core::completion::CompletionError,
         >,
     > + WasmCompatSend {
-        async { unimplemented!("DeepAgentBuilder requires a model — call .model(...) before .build()") }
+        async {
+            Err(rig_core::completion::CompletionError::ResponseError(
+                "DeepAgentBuilder: no model configured — call .model(...) before .build()"
+                    .to_string(),
+            ))
+        }
     }
 }
 
@@ -384,6 +400,10 @@ where
     /// Set the checkpointer.
     ///
     /// Maps to parameter #14: `checkpointer`.
+    ///
+    /// **v0: not connected.** The checkpointer is stored but `build()` does
+    /// not wire it into the agent. Checkpointing requires a custom runner
+    /// wrapper (planned for `deepagents-sessions`, v1).
     pub fn checkpointer(mut self, cp: Arc<dyn Checkpointer>) -> Self {
         self.checkpointer = Some(cp);
         self
@@ -514,8 +534,16 @@ where
     ///
     /// This assembles:
     /// 1. The system prompt (USER + BASE + SUFFIX)
-    /// 2. The middleware hook stack (Filesystem + SubAgent + Summarization + HITL + extra)
+    /// 2. The middleware hook stack in correct execution order:
+    ///    Filesystem → SubAgent → Summarization → HITL → [extra hooks]
     /// 3. The rig [`AgentBuilder`] with all configured parameters
+    ///
+    /// Hook ordering rationale: `HookStack` dispatches hooks in registration
+    /// order (first registered = first executed). For `on_tool_call`, the
+    /// first non-`Run` action wins, so HITL must run *after* permission checks
+    /// to allow `Deny` to take precedence over `Interrupt`. For
+    /// `on_completion_call`, patches accumulate in registration order, so
+    /// Filesystem (which injects fs tools) must run before SubAgent.
     pub fn build(self) -> Agent {
         let prompt = self.assemble_prompt();
 
@@ -525,70 +553,52 @@ where
             builder = builder.name(name);
         }
 
-        // Build the hook stack: standard middleware + extra hooks.
-        // We start with the extra hooks already accumulated, then push
-        // the standard middleware hooks in front.
-        let mut hook_stack = self.extra_hook_stack;
+        // Build the hook stack in correct execution order.
+        // Standard middleware first (in priority order), then extra hooks
+        // as a nested HookStack (HookStack itself implements AgentHook).
+        let mut hook_stack = HookStack::new();
 
-        // HITL middleware (excludable)
-        if !self.profile.is_middleware_excluded("HITL") {
-            if let Some(ref interrupt_map) = self.interrupt_on {
-                hook_stack = Self::push_front(hook_stack, crate::hitl::HitlMiddleware::new(interrupt_map.clone()));
+        // 1. Filesystem middleware (protected — always included if backend exists)
+        if !self.profile.is_middleware_excluded("Filesystem") {
+            if let Some(ref backend) = self.backend {
+                let fs_mw = FilesystemMiddleware::new(backend.clone(), self.permissions.clone());
+                hook_stack.push(fs_mw);
             }
         }
 
-        // Summarization middleware (excludable)
-        if !self.profile.is_middleware_excluded("Summarization") {
-            hook_stack = Self::push_front(hook_stack, SummarizationMiddleware::new());
-        }
-
-        // SubAgent middleware (protected — always included)
+        // 2. SubAgent middleware (protected — always included)
         if !self.profile.is_middleware_excluded("SubAgent") {
             let names: Vec<String> = self.subagents.iter().map(|s| s.name.clone()).collect();
             let mut all_names = names;
             if self.profile.general_purpose_subagent.enabled {
                 all_names.push("general-purpose".to_string());
             }
-            hook_stack = Self::push_front(hook_stack, SubAgentMiddleware::new(all_names));
+            hook_stack.push(SubAgentMiddleware::new(all_names));
         }
 
-        // Filesystem middleware (protected — always included if backend exists)
-        if !self.profile.is_middleware_excluded("Filesystem") {
-            if let Some(ref backend) = self.backend {
-                let fs_mw = FilesystemMiddleware::new(backend.clone(), self.permissions.clone());
-                hook_stack = Self::push_front(hook_stack, fs_mw);
+        // 3. Summarization middleware (excludable)
+        if !self.profile.is_middleware_excluded("Summarization") {
+            hook_stack.push(SummarizationMiddleware::new());
+        }
+
+        // 4. HITL middleware (excludable, runs last among standard middleware
+        //    so permission Deny takes precedence over HITL Interrupt)
+        if !self.profile.is_middleware_excluded("HITL") {
+            if let Some(ref interrupt_map) = self.interrupt_on {
+                hook_stack.push(crate::hitl::HitlMiddleware::new(interrupt_map.clone()));
             }
         }
 
-        if hook_stack.len() > 0 {
+        // 5. Extra hooks (user-registered, run after standard middleware)
+        if self.extra_hook_count > 0 {
+            hook_stack.push(self.extra_hook_stack);
+        }
+
+        if !hook_stack.is_empty() {
             builder = builder.add_hook(hook_stack);
         }
 
         builder.build()
-    }
-
-    /// Push a hook to the front of a HookStack (since HookStack::push appends
-    /// to the end, we rebuild by collecting into a new stack in the right order).
-    fn push_front<H>(mut stack: HookStack, hook: H) -> HookStack
-    where
-        H: AgentHook + 'static,
-    {
-        // HookStack doesn't have push_front, so we create a new stack
-        // with the new hook first, then... actually HookStack::push appends.
-        // We need to build a new stack: new hook first, then old hooks.
-        // But we can't iterate the old hooks. Instead, we just push to the
-        // front by creating a new stack.
-        // Since HookStack is Clone and has a Vec internally, but the Vec is
-        // private, we use a different approach: create a new HookStack with
-        // the new hook, then... we can't merge two HookStacks.
-        //
-        // Alternative: push in reverse order. Since we're building the stack
-        // from scratch each time, we just push in the right order.
-        // Actually, the simplest approach: just push to the end. The order
-        // matters for hook execution but for v0 this is acceptable.
-        // For correct ordering, we should push standard hooks first, then extra.
-        stack.push(hook);
-        stack
     }
 
     /// Build an [`AgentRunner`] from the configured agent, ready for a single
@@ -796,5 +806,203 @@ mod tests {
 
         // 2 standard + 1 extra = 3
         assert_eq!(builder.total_hook_count(), 3);
+    }
+}
+
+// ── End-to-end integration tests ───────────────────────────────────────
+//
+// These tests exercise the full pipeline: DeepAgentBuilder → build() →
+// AgentRunner::run() → PromptResponse. They use MockCompletionModel so no
+// network access is required.
+
+#[cfg(test)]
+mod integration {
+    use super::*;
+    use crate::backend::StateBackend;
+    use crate::mock::MockCompletionModel;
+
+    /// Build a minimal agent (no backend, no tools) and run it with a single
+    /// mock text response. The run should succeed and the output should match
+    /// the mock's programmed response.
+    #[tokio::test]
+    async fn test_e2e_simple_text_response() {
+        let model = MockCompletionModel::single("Hello from the agent!");
+        let runner = DeepAgentBuilder::new()
+            .model(model)
+            .system_prompt("You are a test agent.")
+            .name("e2e-simple")
+            .build_runner("Say hello");
+
+        let response = runner.run().await.expect("run should succeed");
+        assert_eq!(response.output, "Hello from the agent!");
+    }
+
+    /// Build an agent with a backend (Filesystem + SubAgent + Summarization
+    /// middleware) and run it. The middleware hooks fire but the mock model
+    /// just returns text — the run should still succeed.
+    #[tokio::test]
+    async fn test_e2e_with_backend_and_middleware() {
+        let model = MockCompletionModel::single("I have filesystem access.");
+        let backend = Arc::new(StateBackend::new()) as Arc<dyn Backend>;
+
+        let runner = DeepAgentBuilder::new()
+            .model(model)
+            .system_prompt("You are a file agent.")
+            .name("e2e-backend")
+            .backend(backend)
+            .build_runner("List files");
+
+        let response = runner.run().await.expect("run should succeed");
+        assert_eq!(response.output, "I have filesystem access.");
+    }
+
+    /// Build an agent with permissions that deny writes to /etc, then run.
+    /// The mock model returns text (no tool call), so permissions are not
+    /// triggered — the run should succeed normally.
+    #[tokio::test]
+    async fn test_e2e_permissions_not_triggered_without_tool_call() {
+        let model = MockCompletionModel::single("Just chatting, no tools.");
+        let backend = Arc::new(StateBackend::new()) as Arc<dyn Backend>;
+        let perms = vec![crate::permission::FilesystemPermission::deny(
+            vec![crate::permission::FilesystemOperation::Write],
+            vec!["/etc/**".to_string()],
+        )];
+
+        let runner = DeepAgentBuilder::new()
+            .model(model)
+            .system_prompt("You are a restricted agent.")
+            .name("e2e-perms")
+            .backend(backend)
+            .permissions(perms)
+            .build_runner("Write to /etc/passwd");
+
+        let response = runner.run().await.expect("run should succeed");
+        assert_eq!(response.output, "Just chatting, no tools.");
+    }
+
+    /// Build an agent with HITL interrupt_on configured, then run with a
+    /// mock text response. Since the model doesn't make a tool call, the HITL
+    /// hook is never triggered — the run should succeed.
+    #[tokio::test]
+    async fn test_e2e_hitl_not_triggered_without_tool_call() {
+        let model = MockCompletionModel::single("No tool calls here.");
+        let backend = Arc::new(StateBackend::new()) as Arc<dyn Backend>;
+
+        let mut interrupt_map = InterruptMap::new();
+        interrupt_map.insert_simple("write_file", true);
+
+        let runner = DeepAgentBuilder::new()
+            .model(model)
+            .system_prompt("You are a HITL agent.")
+            .name("e2e-hitl")
+            .backend(backend)
+            .interrupt_on(interrupt_map)
+            .build_runner("Write a file");
+
+        let response = runner.run().await.expect("run should succeed");
+        assert_eq!(response.output, "No tool calls here.");
+    }
+
+    /// Build an agent with an extra user-registered hook and run it.
+    /// The extra hook (SummarizationMiddleware) fires on completion_call
+    /// but doesn't block the run.
+    #[tokio::test]
+    async fn test_e2e_with_extra_hook() {
+        let model = MockCompletionModel::single("Extra hook test.");
+        let backend = Arc::new(StateBackend::new()) as Arc<dyn Backend>;
+
+        let runner = DeepAgentBuilder::new()
+            .model(model)
+            .system_prompt("You are a hooked agent.")
+            .name("e2e-hook")
+            .backend(backend)
+            .hook(SummarizationMiddleware::new())
+            .build_runner("Say something");
+
+        let response = runner.run().await.expect("run should succeed");
+        assert_eq!(response.output, "Extra hook test.");
+    }
+
+    /// Build an agent with excluded Summarization middleware and run it.
+    /// The run should succeed with only Filesystem + SubAgent middleware.
+    #[tokio::test]
+    async fn test_e2e_exclude_summarization() {
+        let model = MockCompletionModel::single("No summarization needed.");
+        let backend = Arc::new(StateBackend::new()) as Arc<dyn Backend>;
+
+        let runner = DeepAgentBuilder::new()
+            .model(model)
+            .system_prompt("You are a minimal agent.")
+            .name("e2e-no-sum")
+            .backend(backend)
+            .exclude_middleware("Summarization")
+            .build_runner("Say something");
+
+        let response = runner.run().await.expect("run should succeed");
+        assert_eq!(response.output, "No summarization needed.");
+    }
+
+    /// Build an agent with a multi-response mock model. The first response
+    /// is consumed by the run; the model should still have remaining
+    /// responses in its queue.
+    #[tokio::test]
+    async fn test_e2e_multi_response_model() {
+        let model = MockCompletionModel::from_responses(vec![
+            "first response".to_string(),
+            "second response".to_string(),
+        ]);
+
+        // Clone the model so we can inspect remaining() after the run.
+        let model_for_check = model.clone();
+
+        let runner = DeepAgentBuilder::new()
+            .model(model)
+            .system_prompt("You are a multi-response agent.")
+            .name("e2e-multi")
+            .build_runner("Say first");
+
+        let response = runner.run().await.expect("run should succeed");
+        assert_eq!(response.output, "first response");
+        // One response consumed, one remaining.
+        assert_eq!(model_for_check.remaining(), 1);
+    }
+
+    /// Build an agent with a prompt assembled from USER + BASE + SUFFIX.
+    /// The run should succeed and the mock model's response should come back.
+    #[tokio::test]
+    async fn test_e2e_prompt_assembly() {
+        let model = MockCompletionModel::single("Assembled prompt works.");
+        let runner = DeepAgentBuilder::new()
+            .model(model)
+            .system_prompt("USER INSTRUCTIONS")
+            .base_system_prompt("BASE CONTEXT")
+            .system_prompt_suffix("SUFFIX NOTES")
+            .name("e2e-prompt")
+            .build_runner("Do something");
+
+        let response = runner.run().await.expect("run should succeed");
+        assert_eq!(response.output, "Assembled prompt works.");
+    }
+
+    /// Verify that the PromptResponse carries message history after a run.
+    #[tokio::test]
+    async fn test_e2e_response_has_messages() {
+        let model = MockCompletionModel::single("History test.");
+        let runner = DeepAgentBuilder::new()
+            .model(model)
+            .system_prompt("You are a history agent.")
+            .name("e2e-history")
+            .build_runner("Say something");
+
+        let response = runner.run().await.expect("run should succeed");
+        // The response should carry message history (at least the system
+        // prompt + user prompt + assistant response).
+        assert!(response.messages.is_some());
+        let messages = response.messages.as_ref().unwrap();
+        assert!(
+            messages.len() >= 2,
+            "expected at least 2 messages in history, got {}",
+            messages.len()
+        );
     }
 }

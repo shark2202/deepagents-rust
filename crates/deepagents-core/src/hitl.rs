@@ -2,12 +2,23 @@
 //!
 //! The HITL middleware intercepts tool calls that require human approval
 //! before execution. It implements [`AgentHook`] and checks each tool call
-//! against an [`InterruptPolicy`] map. When a tool requires human approval,
-//! the run is paused via [`ToolCallAction::Stop`], the [`AgentRun`] state is
-//! serialized as a checkpoint, and the caller can later deserialize, feed
-//! back the human decision, and resume.
+//! against an [`InterruptPolicy`] map.
 //!
-//! See `docs/SPEC.md` §Q4 for the design rationale.
+//! ## v0 behavior
+//!
+//! In v0, rig's `ToolCallAction::Stop` terminates the run with
+//! `PromptError::prompt_cancelled` — it does **not** pause. True
+//! pause/resume requires a custom runner wrapper that intercepts the
+//! `RequireHuman` decision, serializes the run state, waits for a human
+//! [`ResumeInput`], and resumes. That wrapper will be implemented in
+//! `deepagents-sessions` (v1).
+//!
+//! For v0, when a tool call requires human approval, we use
+//! [`ToolCallAction::skip`] to send a feedback message to the model
+//! instead of terminating the run. The [`PauseCheckpoint`] and
+//! [`ResumeInput`] types are forward declarations for the v1 API.
+//!
+//! See `docs/SPEC.md` §Q4 and `docs/adr/0001-rig-as-base.md` for rationale.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -280,15 +291,23 @@ impl InterruptMap {
 /// The HITL middleware: an [`AgentHook`] that intercepts tool calls
 /// requiring human approval.
 ///
-/// When a tool call matches a policy that requires human approval, the hook
-/// returns [`ToolCallAction::Stop("awaiting approval")`], pausing the run.
-/// The caller serializes the [`AgentRun`] as a checkpoint, collects the
-/// human decision, then deserializes and resumes.
+/// ## v0 behavior
+///
+/// In v0, when a tool call requires human approval (`RequireHuman`),
+/// the hook returns [`ToolCallAction::skip`] with a message explaining
+/// that human approval is needed. This sends feedback to the model
+/// without terminating the run (rig's `Stop` action would cancel the
+/// entire run with `prompt_cancelled`, which is too destructive for v0).
+///
+/// True pause/resume — where the run is suspended, the caller collects
+/// a human [`ResumeInput`], and the run resumes — requires a custom
+/// runner wrapper that will be implemented in `deepagents-sessions` (v1).
+/// The [`PauseCheckpoint`] and [`ResumeInput`] types are forward
+/// declarations for that v1 API.
 ///
 /// For resolver-based policies, the resolver is called synchronously. If it
 /// returns [`ApprovalDecision::Approve`], the tool executes normally. If it
 /// returns [`ApprovalDecision::Reject`], the tool is skipped with feedback.
-/// If it returns [`ApprovalDecision::RequireHuman`], the run pauses.
 pub struct HitlMiddleware {
     /// The interrupt map (tool name → policy).
     interrupt_on: InterruptMap,
@@ -379,9 +398,16 @@ impl AgentHook for HitlMiddleware {
             match decision {
                 ApprovalDecision::Approve => ToolCallAction::Run,
                 ApprovalDecision::Reject(reason) => ToolCallAction::skip(reason),
-                ApprovalDecision::RequireHuman => {
-                    ToolCallAction::stop("awaiting approval")
-                }
+                // v0: skip the tool call with a feedback message instead of
+                // stopping the run. rig's Stop terminates the entire run
+                // with prompt_cancelled, which is too destructive. True
+                // pause/resume requires a custom runner wrapper (v1,
+                // deepagents-sessions).
+                ApprovalDecision::RequireHuman => ToolCallAction::skip(
+                    "This tool call requires human approval, which is not \
+                     yet supported in v0. The call has been skipped. \
+                     (True pause/resume arrives with deepagents-sessions.)",
+                ),
             }
         }
     }

@@ -18,7 +18,7 @@ use rig_core::completion::Message;
 use rig_core::wasm_compat::WasmCompatSend;
 
 use crate::backend::Backend;
-use crate::permission::FilesystemPermission;
+use crate::permission::{FilesystemOperation, FilesystemPermission, PermissionChecker, PermissionMode};
 
 // ── FilesystemMiddleware ──────────────────────────────────────────────
 
@@ -34,6 +34,8 @@ pub struct FilesystemMiddleware {
     backend: Arc<dyn Backend>,
     /// Filesystem permission rules (for tool execution, not hook logic).
     permissions: Vec<FilesystemPermission>,
+    /// Pre-built permission checker for efficient rule evaluation.
+    permission_checker: PermissionChecker,
     /// Whether the backend supports shell execution.
     has_sandbox: bool,
     /// Threshold (in bytes) above which a tool result is evicted to a file.
@@ -44,9 +46,11 @@ pub struct FilesystemMiddleware {
 impl FilesystemMiddleware {
     /// Create a new filesystem middleware.
     pub fn new(backend: Arc<dyn Backend>, permissions: Vec<FilesystemPermission>) -> Self {
+        let permission_checker = PermissionChecker::new(permissions.clone());
         Self {
             backend,
             permissions,
+            permission_checker,
             has_sandbox: false,
             eviction_threshold: 10_000,
         }
@@ -107,6 +111,34 @@ impl FilesystemMiddleware {
         }
         tools
     }
+
+    /// Map a filesystem tool name to the operation kind for permission checks.
+    ///
+    /// - Read tools: `read_file`, `ls`, `glob`, `grep`
+    /// - Write tools: `write_file`, `edit_file`
+    /// - `execute` is not a filesystem operation → `None` (no permission check)
+    /// - Unknown tools → `None` (no permission check, allow to proceed)
+    fn map_tool_to_operation(tool_name: &str) -> Option<FilesystemOperation> {
+        match tool_name {
+            "read_file" | "ls" | "glob" | "grep" => Some(FilesystemOperation::Read),
+            "write_file" | "edit_file" => Some(FilesystemOperation::Write),
+            _ => None,
+        }
+    }
+
+    /// Extract the filesystem path from a tool call's JSON arguments.
+    ///
+    /// Looks for common field names: `"path"`, `"file_path"`, `"filepath"`.
+    /// Returns `None` if the JSON is invalid or none of the fields are present.
+    fn extract_path(args: &str) -> Option<String> {
+        let value: serde_json::Value = serde_json::from_str(args).ok()?;
+        for key in &["path", "file_path", "filepath"] {
+            if let Some(path) = value.get(key).and_then(|v| v.as_str()) {
+                return Some(path.to_string());
+            }
+        }
+        None
+    }
 }
 
 impl std::fmt::Debug for FilesystemMiddleware {
@@ -134,10 +166,13 @@ impl AgentHook for FilesystemMiddleware {
         _event: CompletionCallEvent<'_>,
     ) -> impl std::future::Future<Output = CompletionCallAction> + WasmCompatSend {
         // Inject filesystem instructions via preamble patch.
-        // Dynamic tool filtering is done via active_tools.
-        let patch = RequestPatch::new()
-            .preamble(self.fs_system_prompt())
-            .active_tools(self.tool_names().iter().map(|s| s.to_string()));
+        //
+        // v0: Only the preamble is patched. `active_tools` is omitted because
+        // filesystem tools (write_file, read_file, etc.) are not yet
+        // registered as rig tool implementations — they exist only as names
+        // in the system prompt. Registering concrete tool implementations
+        // backed by the Backend trait is planned for v1.
+        let patch = RequestPatch::new().preamble(self.fs_system_prompt());
         async move { CompletionCallAction::patch(patch) }
     }
 
@@ -168,9 +203,54 @@ impl AgentHook for FilesystemMiddleware {
     fn on_tool_call(
         &self,
         _ctx: &HookContext,
-        _event: RigToolCall<'_>,
+        event: RigToolCall<'_>,
     ) -> impl std::future::Future<Output = ToolCallAction> + WasmCompatSend {
-        async { ToolCallAction::Run }
+        // Enforce filesystem permissions before the tool executes.
+        //
+        // The tool call's `args` field is a JSON string; we extract the
+        // "path" (or "file_path") field, map the tool name to a
+        // FilesystemOperation, then ask the PermissionChecker for a mode.
+        //
+        // - Allow → Run the tool normally.
+        // - Deny  → Skip the tool call, sending a permission-denied message
+        //           back to the model so it can adjust.
+        // - Interrupt → v0: same as Deny but with a distinct message.
+        //   (A future deepagents-sessions runner wrapper will convert
+        //   Interrupt into a true pause/resume checkpoint.)
+        let tool_name = event.tool_name.to_string();
+        let args = event.args.to_string();
+
+        let op = Self::map_tool_to_operation(&tool_name);
+        let path = Self::extract_path(&args);
+        let mode = match (op, path.as_deref()) {
+            (Some(op), Some(path)) => self.permission_checker.check(op, path),
+            // Unknown tool or no path field → allow (let the tool run).
+            _ => PermissionMode::Allow,
+        };
+
+        async move {
+            match mode {
+                PermissionMode::Allow => ToolCallAction::Run,
+                PermissionMode::Deny => {
+                    let p = path.as_deref().unwrap_or("(unknown)");
+                    ToolCallAction::skip(format!(
+                        "Permission denied: operation on '{p}' is not allowed \
+                         by the configured filesystem permissions."
+                    ))
+                }
+                // v0: Interrupt behaves like Deny (skip with a message).
+                // A future runner wrapper will intercept Interrupt to pause
+                // and wait for human approval before resuming.
+                PermissionMode::Interrupt => {
+                    let p = path.as_deref().unwrap_or("(unknown)");
+                    ToolCallAction::skip(format!(
+                        "Permission interrupt: operation on '{p}' requires \
+                         human approval. In v0, this is treated as a deny. \
+                         (True pause/resume arrives with deepagents-sessions.)"
+                    ))
+                }
+            }
+        }
     }
 
     fn on_tool_result(
